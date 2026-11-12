@@ -1,16 +1,8 @@
-// Copyright 2017-2019 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2017-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #ifndef _BTC_BLE_MESH_CONFIG_MODEL_H_
 #define _BTC_BLE_MESH_CONFIG_MODEL_H_
@@ -53,7 +45,10 @@ void btc_ble_mesh_config_client_cb_handler(btc_msg_t *msg);
 
 void btc_ble_mesh_config_client_arg_deep_copy(btc_msg_t *msg, void *p_dest, void *p_src);
 
-void btc_ble_mesh_config_client_publish_callback(uint32_t opcode, struct bt_mesh_model *model,
+void btc_ble_mesh_config_client_arg_deep_free(btc_msg_t *msg);
+
+void btc_ble_mesh_config_client_publish_callback(uint32_t opcode,
+                                                 struct bt_mesh_model *model,
                                                  struct bt_mesh_msg_ctx *ctx,
                                                  struct net_buf_simple *buf);
 
@@ -69,7 +64,8 @@ typedef enum {
     BTC_BLE_MESH_EVT_CONFIG_SERVER_MAX,
 } btc_ble_mesh_config_server_evt_t;
 
-void bt_mesh_config_server_cb_evt_to_btc(uint8_t evt_type, struct bt_mesh_model *model,
+void bt_mesh_config_server_cb_evt_to_btc(uint8_t evt_type,
+                                         struct bt_mesh_model *model,
                                          struct bt_mesh_msg_ctx *ctx,
                                          const uint8_t *val, size_t len);
 

@@ -1,16 +1,8 @@
-// Copyright 2015-2016 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 
 /*****************************************************************************
@@ -39,7 +31,9 @@
 typedef UINT32 btc_sm_state_t;
 typedef UINT32 btc_sm_event_t;
 typedef void *btc_sm_handle_t;
-typedef BOOLEAN (* btc_sm_handler_t)(btc_sm_event_t event, void *data);
+/* 'user_data' is the context given to btc_sm_init(), it lets several state
+ * machines share one handler table while each keeps its own control block. */
+typedef BOOLEAN (* btc_sm_handler_t)(btc_sm_event_t event, void *data, void *user_data);
 
 
 /*****************************************************************************
@@ -57,12 +51,13 @@ typedef BOOLEAN (* btc_sm_handler_t)(btc_sm_event_t event, void *data);
 **              The caller should ensure that the table and the corresponding
 **              states match. The location that 'p_handlers' points to shall
 **              be available until the btc_sm_shutdown API is invoked.
+**              'user_data' is passed unchanged to every handler invocation.
 **
 ** Returns      Returns a pointer to the initialized state machine handle.
 **
 ******************************************************************************/
 btc_sm_handle_t btc_sm_init(const btc_sm_handler_t *p_handlers,
-                            btc_sm_state_t initial_state);
+                            btc_sm_state_t initial_state, void *user_data);
 
 /*****************************************************************************
 **

@@ -1,49 +1,147 @@
-﻿*********************************************
-Linux 平台工具链的标准设置
-*********************************************
+************************************************
+在 Linux 上安装 ESP-IDF 及工具链
+************************************************
 
 :link_to_translation:`en:[English]`
 
-安装准备
-=====================
-
-编译 ESP-IDF 需要以下软件包。请根据使用的系统，选择合适的安装命令，如下所示：
-
-- Ubuntu 和 Debian::
-
-    sudo apt-get install git wget flex bison gperf python3 python3-pip python3-setuptools cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
-
-- CentOS 7 & 8::
-
-    sudo yum -y update && sudo yum install git wget flex bison gperf python3 python3-pip python3-setuptools cmake ninja-build ccache dfu-util libusbx
-
-目前仍然支持 CentOS 7，但为了更好的用户体验，建议使用 CentOS 8。
-
-- Arch::
-
-    sudo pacman -S --needed gcc git make flex bison gperf python-pip cmake ninja ccache dfu-util libusb
+本章节将介绍如何使用 ESP-IDF 安装管理器 (EIM) 在 Linux 发行版（例如 Ubuntu）上安装 ESP-IDF 及其所需工具。
 
 .. note::
-    - 使用 ESP-IDF 需要 CMake 3.5 或以上版本。较早的 Linux 发行版可能需要升级自身的软件源仓库，或开启 backports 套件库，或安装 "cmake3" 软件包（不是安装 "cmake"）。
-    - 如果上述列表中，并没有您使用的系统，请参考您所用系统的相关文档，查看安装软件包所用的命令。
 
-其他提示
-===============
+   本章节描述了 ESP-IDF v6.0 及以上版本的默认和推荐安装方式。如使用 ESP-IDF v6.0 之前版本的默认安装方式，请参考 :doc:`Linux 上的传统安装方法 <linux-macos-setup-legacy>`。
 
-权限问题 /dev/ttyUSB0
-------------------------------------------------------------
 
-使用某些 Linux 版本向 {IDF_TARGET_NAME} 烧录固件时，可能会出现 ``Failed to open port /dev/ttyUSB0`` 错误消息。此时可以将用户添加至 :ref:`Linux Dialout 组<linux-dialout-group>`。
+第一步：安装依赖包（可选）
+==========================
 
-兼容的 Python 版本
+如计划通过 :ref:`APT <install-eim-linux-apt>` 安装 EIM，可跳过本步骤。
+
+如使用其他方式安装 EIM，请根据 Linux 发行版安装相应的 `依赖包 <https://docs.espressif.com/projects/idf-im-ui/en/latest/prerequisites.html#linux>`_。
+
+.. note::
+
+    ESP-IDF  要求 Python 版本至少为 3.11。
+
+    EIM 所需的 Python 版本，请参考 `EIM 文档 <https://docs.espressif.com/projects/idf-im-ui/en/latest/prerequisites.html#python-version>`_。
+
+
+第二步：安装 EIM
+=================
+
+您可以使用以下任一方法安装 EIM：
+
+- `下载 EIM`_
+- `通过 APT 安装（Debian 发行版）`_
+- `通过 DNF 安装（RPM 发行版）`_
+- `通过 Homebrew 安装`_
+
+通过 APT 或 DNF 安装 EIM 便于后续升级更新。
+
+
+下载 EIM
+~~~~~~~~~
+
+.. figure:: ../../_static/get-started-eim-download.drawio.png
+   :alt: EIM 下载页面
+   :align: left
+   :width: 35%
+   :target: https://dl.espressif.com/dl/eim/
+
+可选择下载在线或离线安装程序的图形用户界面 (GUI) 或命令行界面 (CLI) 版本。
+
+
+.. _install-eim-linux-apt:
+
+通过 APT 安装（Debian 发行版）
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+将 EIM 仓库添加到 APT 源列表，以便后续使用 APT 安装 EIM：
+
+.. code-block:: bash
+
+    echo "deb [trusted=yes] https://dl.espressif.com/dl/eim/apt/ stable main" | sudo tee /etc/apt/sources.list.d/espressif.list
+
+    sudo apt update
+
+然后，通过 APT 安装 EIM 的命令行界面 (CLI) 和图形用户界面 (GUI)，或仅安装命令行界面 (CLI)：
+
+- GUI 和 CLI：
+    .. code-block:: bash
+
+        sudo apt install eim
+
+- 仅 CLI：
+    .. code-block:: bash
+
+        sudo apt install eim-cli
+
+
+通过 DNF 安装（RPM 发行版）
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+将 EIM 仓库添加到 DNF 源列表，以便后续使用 DNF 安装 EIM：
+
+.. code-block:: bash
+
+    sudo tee /etc/yum.repos.d/espressif-eim.repo << 'EOF'
+    [eim]
+    name=ESP-IDF Installation Manager
+    baseurl=https://dl.espressif.com/dl/eim/rpm/$basearch
+    enabled=1
+    gpgcheck=0
+    EOF
+
+然后，通过 DNF 安装 EIM 的命令行界面 (CLI) 和图形用户界面 (GUI)，或仅安装命令行界面 (CLI)：
+
+- GUI 和 CLI：
+    .. code-block:: bash
+
+        sudo dnf install eim
+
+- 仅 CLI：
+    .. code-block:: bash
+
+        sudo dnf install eim-cli
+
+
+通过 Homebrew 安装
+~~~~~~~~~~~~~~~~~~~~~~~
+
+也可以使用 `Homebrew <https://brew.sh/>`_ 在 Linux 上安装 EIM，此方法适用于大多数 Linux 发行版。如果不想使用系统包管理器，Homebrew 也是一个不错的选择。
+
+首先，如果尚未安装 Homebrew，请先安装：
+
+.. code-block:: bash
+
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+然后添加 Espressif tap 并安装 EIM：
+
+.. code-block:: bash
+
+    # 添加 Espressif tap
+    brew tap espressif/eim
+
+    # 仅安装 CLI
+    brew install eim
+
+    # 或安装 GUI（含 CLI）
+    brew install --cask eim-gui
+
+后续更新 EIM：
+
+.. code-block:: bash
+
+    brew upgrade eim
+    # 或
+    brew upgrade --cask eim-gui
+
+.. note::
+
+    GUI 版本需要图形环境，不同的 Linux 发行版可能有不同的额外依赖。
+
+
+第三步：使用 EIM 安装 ESP-IDF
 =================================
 
-ESP-IDF 支持 Python 3.6 及以上版本，建议升级操作系统到最新版本从而更新 Python。也可选择从 `sources <https://www.python.org/downloads/>`_ 安装最新版 Python，或使用 Python 管理系统如 `pyenv <https://github.com/pyenv/pyenv>`_ 对版本进行升级管理。
-
-后续步骤
-==========
-
-继续设置开发环境，请前往 :ref:`get-started-get-esp-idf` 章节。
-
-
-.. _AUR: https://wiki.archlinux.org/index.php/Arch_User_Repository
+.. include:: eim-install-idf.rst

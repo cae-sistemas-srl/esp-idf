@@ -1,16 +1,8 @@
-// Copyright 2015-2016 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #ifndef __BTC_AV_CO_H__
 #define __BTC_AV_CO_H__
@@ -26,6 +18,10 @@
 enum {
     BTC_SV_AV_AA_SBC_INDEX = 0,
     BTC_SV_AV_AA_SBC_SINK_INDEX,
+#if (BTC_AV_CODEC_AAC_INCLUDED == TRUE)
+    BTC_SV_AV_AA_M24_INDEX,
+    BTC_SV_AV_AA_M24_SINK_INDEX,
+#endif
     BTC_SV_AV_AA_SEP_INDEX  /* Last index */
 };
 
@@ -55,12 +51,17 @@ typedef struct {
     tBTA_AV_CO_SINK *p_snk;             /* currently selected sink */
     tBTA_AV_CO_SINK *p_src;             /* currently selected src */
     UINT8           codec_cfg[AVDT_CODEC_SIZE]; /* current codec configuration */
+    tBTC_AV_CODEC_INFO cur_codec_cfg;   /* codec the stream to this peer was configured with. Kept per
+                                         * peer because several sinks can be connected at once and each
+                                         * one negotiates its own configuration */
     BOOLEAN         cp_active;          /* current CP configuration */
     BOOLEAN         acp;                /* acceptor */
     BOOLEAN         recfg_needed;       /* reconfiguration is needed */
     BOOLEAN         opened;             /* opened */
     UINT16          mtu;                /* maximum transmit unit size */
     UINT16          uuid_to_connect;    /* uuid of peer device */
+    BOOLEAN         got_disc_res;       /* got the results of initiating discovery */
+    BOOLEAN         pref_mcc_reconfig_initiated;    /* TRUE if last bta_av_co_audio_set_pref_mcc() initiated reconfig for this peer */
 } tBTA_AV_CO_PEER;
 
 typedef struct {
@@ -71,8 +72,13 @@ typedef struct {
 typedef struct {
     /* Connected peer information */
     tBTA_AV_CO_PEER peers[BTA_AV_NUM_STRS];
+#if (BTC_AV_EXT_CODEC == TRUE)
+    UINT8 cur_seid;                         /* current stream endpoint id */
+    tBTC_AV_CODEC_INFO codec_caps[BTA_AV_MAX_SEPS];
+#endif
     /* Current codec configuration - access to this variable must be protected */
     tBTC_AV_CODEC_INFO codec_cfg;
+    tBTC_AV_CODEC_INFO codec_pref_cfg;      /* preferred media codec configuration for source */
     tBTC_AV_CODEC_INFO codec_cfg_setconfig; /* remote peer setconfig preference */
 
     tBTA_AV_CO_CP cp;
@@ -127,6 +133,61 @@ UINT8 bta_av_co_cp_get_flag(void);
  **
  *******************************************************************************/
 BOOLEAN bta_av_co_cp_set_flag(UINT8 cp_flag);
+
+/*******************************************************************************
+ **
+ ** Function         bta_av_co_audio_set_pref_mcc
+ **
+ ** Description      Set preferred codec configuration for a specific connection
+ **                  and initiate reconfiguration if the connection is open.
+ **
+ **                  Note: This function returns TRUE if the preferred config is
+ **                  supported. The actual success
+ **                  or failure of reconfiguration will be reported asynchronously
+ **                  via BTA_AV_RECONFIG_EVT.
+ **
+ ** Returns          TRUE if the preferred config is supported, FALSE otherwise
+ **
+ *******************************************************************************/
+BOOLEAN bta_av_co_audio_set_pref_mcc(tBTA_AV_HNDL hndl, tBTC_AV_CODEC_INFO *pref_mcc);
+
+/*******************************************************************************
+ **
+ ** Function         bta_av_co_audio_clear_pref_mcc
+ **
+ ** Description      Clear the preferred codec configuration
+ **
+ ** Returns          void
+ **
+ *******************************************************************************/
+void bta_av_co_audio_clear_pref_mcc(tBTA_AV_HNDL hndl);
+
+/*******************************************************************************
+ **
+ ** Function         bta_av_co_audio_pref_mcc_reconfig_initiated
+ **
+ ** Description      Check if a reconfig was actually initiated by the last call
+ **                  to bta_av_co_audio_set_pref_mcc(). This is used to determine
+ **                  if we need to wait for BTA_AV_RECONFIG_EVT or can notify
+ **                  immediately (when config unchanged).
+ **
+ ** Returns          TRUE if reconfig was initiated, FALSE if config unchanged
+ **
+ *******************************************************************************/
+BOOLEAN bta_av_co_audio_pref_mcc_reconfig_initiated(tBTA_AV_HNDL hndl);
+
+/*******************************************************************************
+ **
+ ** Function         bta_av_co_audio_pref_mcc_reconfig_clear
+ **
+ ** Description      Clear the pref_mcc_reconfig_initiated flag for a specific
+ **                  connection. This should be called after processing a
+ **                  BTA_AV_RECONFIG_EVT for preferred codec config change.
+ **
+ ** Returns          void
+ **
+ *******************************************************************************/
+void bta_av_co_audio_pref_mcc_reconfig_clear(tBTA_AV_HNDL hndl);
 
 /*******************************************************************************
  **
@@ -196,8 +257,7 @@ void bta_av_co_audio_discard_config(tBTA_AV_HNDL hndl);
  ** Returns          Nothing
  **
  *******************************************************************************/
-void bta_av_co_init(void);
-
+void bta_av_co_init(tBTC_AV_CODEC_INFO *codec_caps);
 
 /*******************************************************************************
  **
@@ -218,10 +278,41 @@ BOOLEAN bta_av_co_peer_cp_supported(tBTA_AV_HNDL hndl);
  **                  of our exported bitpool range. If set we will set the
  **                  remote preference.
  **
- ** Returns          TRUE if config set, FALSE otherwize
+ ** Returns          TRUE if config set, FALSE otherwise
  **
  *******************************************************************************/
 BOOLEAN bta_av_co_get_remote_bitpool_pref(UINT8 *min, UINT8 *max);
+
+/*******************************************************************************
+ **
+ ** Function         bta_av_co_get_peer_sink_caps
+ **
+ ** Description      Get currently selected sink codec capabilities of the peer
+ **
+ ** Returns          TRUE if sink capabilities are available, FALSE otherwise
+ **
+ *******************************************************************************/
+BOOLEAN bta_av_co_get_peer_sink_caps(tBTA_AV_HNDL hndl, UINT8 *p_codec_caps, UINT8 *p_codec_type);
+
+/*******************************************************************************
+ **
+ ** Function         bta_av_co_get_cur_codec_info
+ **
+ ** Description      Get current codec info
+ **
+ *******************************************************************************/
+void bta_av_co_get_cur_codec_info(tBTC_AV_CODEC_INFO *cur_codec_info);
+
+/*******************************************************************************
+ **
+ ** Function         bta_av_co_get_codec_info_by_hndl
+ **
+ ** Description      Get the codec info a single connection was configured with.
+ **                  Falls back to the global configuration when the connection
+ **                  has not negotiated one yet.
+ **
+ *******************************************************************************/
+void bta_av_co_get_codec_info_by_hndl(tBTA_AV_HNDL hndl, tBTC_AV_CODEC_INFO *cur_codec_info);
 
 #endif  ///BTA_AV_INCLUDED == TRUE
 

@@ -1,0 +1,92 @@
+/*
+ * SPDX-FileCopyrightText: 2019-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#pragma once
+
+#include "driver/dac_types.h"
+#include "esp_err.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#if SOC_DAC_SUPPORTED
+
+typedef struct dac_oneshot_s    *dac_oneshot_handle_t;  /*!< DAC oneshot channel handle */
+
+/**
+ * @brief DAC oneshot channel configuration
+ *
+ */
+typedef struct {
+    dac_channel_t               chan_id;    /*!< DAC channel id */
+    dac_channel_config_t        chan_cfg;   /*!< Channel (analog pad) configuration. */
+} dac_oneshot_config_t;
+
+/**
+ * @brief Allocate a new DAC oneshot channel
+ * @note  The channel will be enabled as well when the channel allocated
+ *
+ * @param[in]  oneshot_cfg   The configuration for the oneshot channel
+ * @param[out] ret_handle    The returned oneshot channel handle
+ * @return
+ *      - ESP_ERR_INVALID_ARG  The input parameter is invalid
+ *      - ESP_ERR_INVALID_STATE The DAC channel has been registered already
+ *      - ESP_ERR_NO_MEM        No memory for the DAC oneshot channel resources
+ *      - ESP_OK                Allocate the new DAC oneshot channel success
+ */
+esp_err_t dac_oneshot_new_channel(const dac_oneshot_config_t *oneshot_cfg, dac_oneshot_handle_t *ret_handle);
+
+/**
+ * @brief Delete the DAC oneshot channel
+ * @note  The channel will be disabled as well when the channel deleted
+ *
+ * @param[in]  handle       The DAC oneshot channel handle
+ * @return
+ *      - ESP_ERR_INVALID_ARG  The input parameter is invalid
+ *      - ESP_ERR_INVALID_STATE The channel has already been de-registered
+ *      - ESP_OK                Delete the oneshot channel success
+ */
+esp_err_t dac_oneshot_del_channel(dac_oneshot_handle_t handle);
+
+/**
+ * @brief Set the analog output code
+ *
+ * @param[in]  handle       The DAC oneshot channel handle
+ * @param[in]  digi_value   The DAC code to convert. Valid range depends on the channel configuration.
+ * @return
+ *      - ESP_ERR_INVALID_ARG  The input parameter is invalid
+ *      - ESP_OK                Convert the digital value success
+ */
+esp_err_t dac_oneshot_output_code(dac_oneshot_handle_t handle, uint16_t digi_value);
+
+/**
+ * @brief Output the voltage
+ *
+ * @deprecated Use `dac_oneshot_output_code()` instead
+ *
+ * @param[in]  handle       The DAC oneshot channel handle
+ * @param[in]  digi_value   The DAC code to convert. Valid range depends on the channel configuration.
+ * @return
+ *      - ESP_ERR_INVALID_ARG  The input parameter is invalid
+ *      - ESP_OK                Convert the digital value success
+ */
+esp_err_t dac_oneshot_output_voltage(dac_oneshot_handle_t handle, uint16_t digi_value)
+__attribute__((deprecated("Please use dac_oneshot_output_code instead")));
+
+/**
+ * @brief Get the DAC code bit width of a oneshot channel
+ *
+ * @param[in]  handle       The DAC oneshot channel handle
+ * @return                  The DAC code bit width, 0 if the input parameter is invalid
+ */
+uint8_t dac_oneshot_get_bitwidth(dac_oneshot_handle_t handle);
+
+#endif // SOC_DAC_SUPPORTED
+
+#ifdef __cplusplus
+}
+#endif

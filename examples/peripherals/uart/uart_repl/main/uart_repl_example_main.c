@@ -10,7 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/uart.h"
-#include "soc/uart_periph.h"
+#include "hal/uart_periph.h"
 #include "esp_rom_gpio.h"
 #include "driver/gpio.h"
 #include "hal/gpio_hal.h"
@@ -23,8 +23,14 @@
 #define CONSOLE_UART_CHANNEL    (1 - DEFAULT_UART_CHANNEL)
 #define DEFAULT_UART_RX_PIN     (3)
 #define DEFAULT_UART_TX_PIN     (2)
+
+#if CONFIG_IDF_TARGET_ESP32H4
+#define CONSOLE_UART_RX_PIN     (15)
+#define CONSOLE_UART_TX_PIN     (16)
+#else
 #define CONSOLE_UART_RX_PIN     (4)
 #define CONSOLE_UART_TX_PIN     (5)
+#endif
 
 #define UARTS_BAUD_RATE         (115200)
 #define TASK_STACK_SIZE         (2048)
@@ -43,11 +49,11 @@ const char test_message[] = "This is an example string, if you can read this, th
  */
 static void connect_uarts(void)
 {
-    esp_rom_gpio_connect_out_signal(DEFAULT_UART_RX_PIN, UART_PERIPH_SIGNAL(1, SOC_UART_TX_PIN_IDX), false, false);
-    esp_rom_gpio_connect_in_signal(DEFAULT_UART_RX_PIN, UART_PERIPH_SIGNAL(0, SOC_UART_RX_PIN_IDX), false);
+    esp_rom_gpio_connect_out_signal(DEFAULT_UART_RX_PIN, UART_PERIPH_SIGNAL(1, SOC_UART_PERIPH_SIGNAL_TX), false, false);
+    esp_rom_gpio_connect_in_signal(DEFAULT_UART_RX_PIN, UART_PERIPH_SIGNAL(0, SOC_UART_PERIPH_SIGNAL_RX), false);
 
-    esp_rom_gpio_connect_out_signal(DEFAULT_UART_TX_PIN, UART_PERIPH_SIGNAL(0, SOC_UART_TX_PIN_IDX), false, false);
-    esp_rom_gpio_connect_in_signal(DEFAULT_UART_TX_PIN, UART_PERIPH_SIGNAL(1, SOC_UART_RX_PIN_IDX), false);
+    esp_rom_gpio_connect_out_signal(DEFAULT_UART_TX_PIN, UART_PERIPH_SIGNAL(0, SOC_UART_PERIPH_SIGNAL_TX), false, false);
+    esp_rom_gpio_connect_in_signal(DEFAULT_UART_TX_PIN, UART_PERIPH_SIGNAL(1, SOC_UART_PERIPH_SIGNAL_RX), false);
 }
 
 /**
@@ -58,8 +64,8 @@ static void connect_uarts(void)
  */
 static void disconnect_uarts(void)
 {
-    esp_rom_gpio_connect_out_signal(CONSOLE_UART_TX_PIN, UART_PERIPH_SIGNAL(1, SOC_UART_TX_PIN_IDX), false, false);
-    esp_rom_gpio_connect_in_signal(CONSOLE_UART_RX_PIN, UART_PERIPH_SIGNAL(1, SOC_UART_RX_PIN_IDX), false);
+    esp_rom_gpio_connect_out_signal(CONSOLE_UART_TX_PIN, UART_PERIPH_SIGNAL(1, SOC_UART_PERIPH_SIGNAL_TX), false, false);
+    esp_rom_gpio_connect_in_signal(CONSOLE_UART_RX_PIN, UART_PERIPH_SIGNAL(1, SOC_UART_PERIPH_SIGNAL_RX), false);
 }
 
 /**
@@ -76,14 +82,13 @@ static void configure_uarts(void)
         .parity    = UART_PARITY_DISABLE,
         .stop_bits = UART_STOP_BITS_1,
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_APB,
+        .source_clk = UART_SCLK_DEFAULT,
     };
 
     ESP_ERROR_CHECK(uart_driver_install(DEFAULT_UART_CHANNEL, READ_BUF_SIZE * 2, 0, 0, NULL, 0));
     ESP_ERROR_CHECK(uart_param_config(DEFAULT_UART_CHANNEL, &uart_config));
     ESP_ERROR_CHECK(uart_set_pin(DEFAULT_UART_CHANNEL, DEFAULT_UART_TX_PIN, DEFAULT_UART_RX_PIN,
                                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-
 
     connect_uarts();
 }
@@ -92,7 +97,8 @@ static void configure_uarts(void)
  * @brief Function called when command `consoletest` will be invoked.
  * It will simply print `test_message` defined above.
  */
-static int console_test(int argc, char **argv) {
+static int console_test(int argc, char **argv)
+{
     printf("%s\n", test_message);
     return 0;
 }
@@ -104,7 +110,8 @@ static int console_test(int argc, char **argv) {
  * the response on RX.
  * The response shall contain the test_message string.
  */
-static void send_commands(void* arg) {
+static void send_commands(void* arg)
+{
     static char data[READ_BUF_SIZE];
     char command[] = "consoletest\n";
     int len = 0;
@@ -112,24 +119,24 @@ static void send_commands(void* arg) {
 
     /* Discard the first messages sent by the console. */
     do {
-        len = uart_read_bytes(DEFAULT_UART_CHANNEL, data, READ_BUF_SIZE, 100 / portTICK_RATE_MS);
+        len = uart_read_bytes(DEFAULT_UART_CHANNEL, data, READ_BUF_SIZE, 100 / portTICK_PERIOD_MS);
     } while (len == 0);
 
-    if ( len == -1 ) {
+    if (len == -1) {
         goto end;
     }
     /* Send the command `consoletest` to the console UART. */
     len = uart_write_bytes(DEFAULT_UART_CHANNEL, command, sizeof(command));
-    if ( len == -1 ) {
+    if (len == -1) {
         goto end;
     }
 
     /* Get the answer back from the console, give it some delay. */
     do {
-        len = uart_read_bytes(DEFAULT_UART_CHANNEL, data, READ_BUF_SIZE - 1, 250 / portTICK_RATE_MS);
+        len = uart_read_bytes(DEFAULT_UART_CHANNEL, data, READ_BUF_SIZE - 1, 250 / portTICK_PERIOD_MS);
     } while (len == 0);
 
-    if ( len == -1 ) {
+    if (len == -1) {
         goto end;
     }
 
@@ -158,11 +165,11 @@ void app_main(void)
         .func = &console_test,
     };
     esp_console_dev_uart_config_t uart_config = {
-                                                    .channel = CONSOLE_UART_CHANNEL,
-                                                    .baud_rate = UARTS_BAUD_RATE,
-                                                    .tx_gpio_num = CONSOLE_UART_TX_PIN,
-                                                    .rx_gpio_num = CONSOLE_UART_RX_PIN,
-                                                };
+        .channel = CONSOLE_UART_CHANNEL,
+        .baud_rate = UARTS_BAUD_RATE,
+        .tx_gpio_num = CONSOLE_UART_TX_PIN,
+        .rx_gpio_num = CONSOLE_UART_RX_PIN,
+    };
     /**
      * As we don't have a real serial terminal, (we just use default UART to
      * send and receive commands, ) we won't handle any escape sequence, so the
@@ -172,7 +179,7 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_console_new_repl_uart(&uart_config, &repl_config, &repl));
     configure_uarts();
 
-    ESP_ERROR_CHECK( esp_console_cmd_register(&cmd) );
+    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
 
     /* Create a task for sending and receiving commands to and from the second UART. */
     xTaskCreate(send_commands, "send_commands_task", TASK_STACK_SIZE, NULL, 10, NULL);

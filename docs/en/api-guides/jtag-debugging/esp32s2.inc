@@ -26,7 +26,7 @@
     Open On-Chip Debugger  v0.10.0-esp32-20200420 (2020-04-20-16:15)
     Licensed under GNU GPL v2
     For bug reports, read
-            http://openocd.org/doc/doxygen/bugs.html
+            https://openocd.org/doc/doxygen/bugs.html
     none separate
     adapter speed: 20000 kHz
     force hard breakpoints
@@ -92,7 +92,7 @@
       - ESP32-S2 target configuration file. Can be used together with one of the ``interface/`` configuration files.
     * - ``interface/ftdi/esp32s2_kaluga_v1.cfg``
       - JTAG adapter configuration file for ESP32-S2-Kaluga-1 board.
-    * - ``interface/ftdi/esp32_devkitj_v1.cfg``
+    * - ``interface/ftdi/esp_ftdi.cfg``
       - JTAG adapter configuration file for ESP-Prog boards.
 
 ---

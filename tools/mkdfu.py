@@ -1,18 +1,7 @@
 #!/usr/bin/env python
 #
-# Copyright 2020-2021 Espressif Systems (Shanghai) CO LTD
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-FileCopyrightText: 2020-2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 #
 # This program creates archives compatible with ESP32-S* ROM DFU implementation.
 #
@@ -20,10 +9,6 @@
 # as a separate file. In addition to that, a special index file, 'dfuinfo0.dat', is created.
 # This file must be the first one in the archive. It contains binary structures describing each
 # subsequent file (for example, where the file needs to be flashed/loaded).
-
-from __future__ import print_function, unicode_literals
-
-import argparse
 import hashlib
 import json
 import os
@@ -32,16 +17,21 @@ import zlib
 from collections import namedtuple
 from functools import partial
 
-from future.utils import iteritems
-
 try:
-    import typing
+    import typing  # noqa: F401
 except ImportError:
     # Only used for type annotations
     pass
 
+import rich_click as click
+from esp_pylib.cli_types import AnyIntType
+from esp_pylib.constants import ESPRESSIF_VID
+from esp_pylib.excepthook import install_exception_reporting
+from esp_pylib.logger import log
+from rich.markup import escape
+
 try:
-    from itertools import izip as zip  # type: ignore
+    from itertools import izip as zip  # type: ignore  # noqa: A004
 except ImportError:
     # Python 3
     pass
@@ -71,13 +61,11 @@ CPIOHeader = namedtuple(
 CPIO_TRAILER = 'TRAILER!!!'
 
 
-def make_cpio_header(
-    filename_len, file_len, is_trailer=False
-):  # type: (int, int, bool) -> CPIOHeader
-    """ Returns CPIOHeader for the given file name and file size """
+def make_cpio_header(filename_len, file_len, is_trailer=False):  # type: (int, int, bool) -> CPIOHeader
+    """Returns CPIOHeader for the given file name and file size"""
 
     def as_hex(val):  # type: (int) -> bytes
-        return '{:08x}'.format(val).encode('ascii')
+        return f'{val:08x}'.encode('ascii')
 
     hex_0 = as_hex(0)
     mode = hex_0 if is_trailer else as_hex(0o0100644)
@@ -107,33 +95,84 @@ DFUInfo = namedtuple('DFUInfo', ['address', 'flags', 'name', 'md5'])
 DFUINFO_FILE = 'dfuinfo0.dat'
 # Structure which gets added at the end of the entire DFU file
 DFUSUFFIX_STRUCT = b'<H H H H 3s B'
-DFUSuffix = namedtuple(
-    'DFUSuffix', ['bcd_device', 'pid', 'vid', 'bcd_dfu', 'sig', 'len']
-)
-ESPRESSIF_VID = 12346
+DFUSuffix = namedtuple('DFUSuffix', ['bcd_device', 'pid', 'vid', 'bcd_dfu', 'sig', 'len'])
 # This CRC32 gets added after DFUSUFFIX_STRUCT
 DFUCRC_STRUCT = b'<I'
 
+# Flash chip parameters file related things
+FlashParamsData = namedtuple(
+    'FlashParamsData',
+    [
+        'ishspi',
+        'legacy',
+        'deviceId',
+        'chip_size',
+        'block_size',
+        'sector_size',
+        'page_size',
+        'status_mask',
+    ],
+)
+FLASH_PARAMS_STRUCT = b'<IIIIIIII'
+FLASH_PARAMS_FILE = 'flash_params.dat'
+DFU_INFO_FLAG_PARAM = 1 << 2
+DFU_INFO_FLAG_NOERASE = 1 << 3
+DFU_INFO_FLAG_IGNORE_MD5 = 1 << 4
+
 
 def dfu_crc(data, crc=0):  # type: (bytes, int) -> int
-    """ Calculate CRC32/JAMCRC of data, with an optional initial value """
+    """Calculate CRC32/JAMCRC of data, with an optional initial value"""
     uint32_max = 0xFFFFFFFF
     return uint32_max - (zlib.crc32(data, crc) & uint32_max)
 
 
 def pad_bytes(b, multiple, padding=b'\x00'):  # type: (bytes, int, bytes) -> bytes
-    """ Pad 'b' to a length divisible by 'multiple' """
+    """Pad 'b' to a length divisible by 'multiple'"""
     padded_len = (len(b) + multiple - 1) // multiple * multiple
     return b + padding * (padded_len - len(b))
 
 
-class EspDfuWriter(object):
+def flash_size_bytes(size):  # type: (str) -> int
+    """
+    Given a flash size passed in args.flash_size
+    (ie 4MB), return the size in bytes.
+    """
+    try:
+        return int(size.rstrip('MB'), 10) * 1024 * 1024
+    except ValueError as e:
+        raise ValueError(f'Unknown size {size}') from e
+
+
+class EspDfuWriter:
     def __init__(self, dest_file, pid, part_size):  # type: (typing.BinaryIO, int, int) -> None
         self.dest = dest_file
         self.pid = pid
         self.part_size = part_size
         self.entries = []  # type: typing.List[bytes]
         self.index = []  # type: typing.List[DFUInfo]
+
+    def add_flash_params_file(self, flash_size):  # type: (str) -> None
+        """
+        Add a file containing flash chip parameters
+
+        Corresponds to the "flashchip" data structure that the ROM
+        has in RAM.
+
+        See flash_set_parameters() in esptool for more info
+        """
+        flash_params = FlashParamsData(
+            ishspi=0,
+            legacy=0,
+            deviceId=0,  # ignored
+            chip_size=flash_size_bytes(flash_size),  # flash size in bytes
+            block_size=64 * 1024,
+            sector_size=4 * 1024,
+            page_size=256,
+            status_mask=0xFFFF,
+        )
+        data = struct.pack(FLASH_PARAMS_STRUCT, *flash_params)
+        flags = DFU_INFO_FLAG_PARAM | DFU_INFO_FLAG_NOERASE | DFU_INFO_FLAG_IGNORE_MD5
+        self._add_cpio_flash_entry(FLASH_PARAMS_FILE, 0, data, flags)
 
     def add_file(self, flash_addr, path):  # type: (int, str) -> None
         """
@@ -155,7 +194,7 @@ class EspDfuWriter(object):
                 flash_addr += len(chunk)
 
     def finish(self):  # type: () -> None
-        """ Write DFU file """
+        """Write DFU file"""
         # Prepare and add dfuinfo0.dat file
         dfuinfo = b''.join([struct.pack(DFUINFO_STRUCT, *item) for item in self.index])
         self._add_cpio_entry(DFUINFO_FILE, dfuinfo, first=True)
@@ -176,29 +215,23 @@ class EspDfuWriter(object):
         # Finally write the entire binary
         self.dest.write(out_data)
 
-    def _add_cpio_flash_entry(
-        self, filename, flash_addr, data
-    ):  # type: (str, int, bytes) -> None
+    def _add_cpio_flash_entry(self, filename, flash_addr, data, flags=0):  # type: (str, int, bytes, int) -> None
         md5 = hashlib.md5()
         md5.update(data)
         self.index.append(
             DFUInfo(
                 address=flash_addr,
-                flags=0,
+                flags=flags,
                 name=filename.encode('utf-8'),
                 md5=md5.digest(),
             )
         )
         self._add_cpio_entry(filename, data)
 
-    def _add_cpio_entry(
-        self, filename, data, first=False, trailer=False
-    ):  # type: (str, bytes, bool, bool) -> None
+    def _add_cpio_entry(self, filename, data, first=False, trailer=False):  # type: (str, bytes, bool, bool) -> None
         filename_b = filename.encode('utf-8') + b'\x00'
         cpio_header = make_cpio_header(len(filename_b), len(data), is_trailer=trailer)
-        entry = pad_bytes(
-            struct.pack(CPIO_STRUCT, *cpio_header) + filename_b, 4
-        ) + pad_bytes(data, 4)
+        entry = pad_bytes(struct.pack(CPIO_STRUCT, *cpio_header) + filename_b, 4) + pad_bytes(data, 4)
         if not first:
             self.entries.append(entry)
         else:
@@ -207,75 +240,119 @@ class EspDfuWriter(object):
 
 def action_write(args):  # type: (typing.Mapping[str, typing.Any]) -> None
     writer = EspDfuWriter(args['output_file'], args['pid'], args['part_size'])
+    log.note(f'Adding flash chip parameters file with flash_size = {args["flash_size"]}')
+    writer.add_flash_params_file(args['flash_size'])
     for addr, f in args['files']:
-        print('Adding {} at {:#x}'.format(f, addr))
+        log.note(escape(f'Adding {f} at {addr:#x}'))
         writer.add_file(addr, f)
     writer.finish()
-    print('"{}" has been written. You may proceed with DFU flashing.'.format(args['output_file'].name))
+    log.note(escape(f'"{args["output_file"].name}" has been written. You may proceed with DFU flashing.'))
     if args['part_size'] % (4 * 1024) != 0:
-        print('WARNING: Partition size of DFU is not multiple of 4k (4096). You might get unexpected behavior.')
+        log.warn('Partition size of DFU is not multiple of 4k (4096). You might get unexpected behavior.')
+
+
+class HexIntType(click.ParamType):
+    """Parse a hexadecimal integer, with or without the 0x prefix."""
+
+    name = 'hex'
+
+    def convert(self, value: str | int, param: click.Parameter | None, ctx: click.Context | None) -> int:
+        if isinstance(value, int):
+            return value
+        try:
+            return int(value, 16)
+        except ValueError:
+            raise click.BadParameter(f'{value!r} is not a valid hexadecimal integer.', ctx, param)
+
+
+@click.group(context_settings={'help_option_names': ['-h', '--help']})
+def cli() -> None:
+    """Create ESP32-S* ROM DFU archives."""
+
+
+@cli.command('write')
+@click.option(
+    '-o',
+    '--output-file',
+    help='Filename for storing the output DFU image',
+    required=True,
+    type=click.File('wb'),
+)
+@click.option(
+    '--pid',
+    required=True,
+    type=HexIntType(),
+    help='Hexa-decimal product indentificator',
+)
+@click.option(
+    '--json', 'json_path', help='Optional file for loading "flash_files" dictionary with <address> <file> items'
+)
+@click.option(
+    '--part-size',
+    default=os.environ.get('ESP_DFU_PART_SIZE', str(512 * 1024)),
+    type=AnyIntType(),
+    help='Larger files are split-up into smaller partitions of this size',
+)
+@click.option(
+    '-fs',
+    '--flash-size',
+    help='SPI Flash size in MegaBytes (1MB, 2MB, 4MB, 8MB, 16MB, 32MB, 64MB, 128MB)',
+    type=click.Choice(['1MB', '2MB', '4MB', '8MB', '16MB', '32MB', '64MB', '128MB']),
+    default='2MB',
+)
+@click.argument('files', metavar='<address> <file>', nargs=-1)
+def write_cmd(
+    output_file: typing.BinaryIO,
+    pid: int,
+    json_path: str | None,
+    part_size: int,
+    flash_size: str,
+    files: tuple[str, ...],
+) -> None:
+    def check_file(file_name: str) -> str:
+        if not os.path.isfile(file_name):
+            raise RuntimeError(f'{file_name} is not a regular file!')
+        return file_name
+
+    file_list = []
+    if files:
+        if len(files) % 2 != 0:
+            raise click.UsageError('files must be specified as pairs of <address> <file>')
+        file_list += [(int(addr, 0), check_file(f_name)) for addr, f_name in zip(files[::2], files[1::2])]
+
+    if json_path:
+        json_dir = os.path.dirname(os.path.abspath(json_path))
+
+        def process_json_file(path: str) -> str:
+            """
+            The input path is relative to json_dir. This function makes it relative to the current working
+            directory.
+            """
+            return check_file(os.path.relpath(os.path.join(json_dir, path), start=os.curdir))
+
+        with open(json_path, encoding='utf-8') as f:
+            file_list += [
+                (int(addr, 0), process_json_file(f_name)) for addr, f_name in json.load(f)['flash_files'].items()
+            ]
+
+    file_list = sorted(
+        [(addr, f_name) for addr, f_name in dict(file_list).items()], key=lambda x: x[0]
+    )  # remove possible duplicates and sort based on the address
+
+    action_write(
+        {
+            'output_file': output_file,
+            'files': file_list,
+            'pid': pid,
+            'part_size': part_size,
+            'flash_size': flash_size,
+        }
+    )
 
 
 def main():  # type: () -> None
-    parser = argparse.ArgumentParser()
-
-    # Provision to add "info" command
-    subparsers = parser.add_subparsers(dest='command')
-    write_parser = subparsers.add_parser('write')
-    write_parser.add_argument('-o', '--output-file',
-                              help='Filename for storing the output DFU image',
-                              required=True,
-                              type=argparse.FileType('wb'))
-    write_parser.add_argument('--pid',
-                              required=True,
-                              type=lambda h: int(h, 16),
-                              help='Hexa-decimal product indentificator')
-    write_parser.add_argument('--json',
-                              help='Optional file for loading "flash_files" dictionary with <address> <file> items')
-    write_parser.add_argument('--part-size',
-                              default=os.environ.get('ESP_DFU_PART_SIZE', 512 * 1024),
-                              type=lambda x: int(x, 0),
-                              help='Larger files are split-up into smaller partitions of this size')
-    write_parser.add_argument('files',
-                              metavar='<address> <file>', help='Add <file> at <address>',
-                              nargs='*')
-
-    args = parser.parse_args()
-
-    def check_file(file_name):  # type: (str) -> str
-        if not os.path.isfile(file_name):
-            raise RuntimeError('{} is not a regular file!'.format(file_name))
-        return file_name
-
-    files = []
-    if args.files:
-        files += [(int(addr, 0), check_file(f_name)) for addr, f_name in zip(args.files[::2], args.files[1::2])]
-
-    if args.json:
-        json_dir = os.path.dirname(os.path.abspath(args.json))
-
-        def process_json_file(path):  # type: (str) -> str
-            '''
-            The input path is relative to json_dir. This function makes it relative to the current working
-            directory.
-            '''
-            return check_file(os.path.relpath(os.path.join(json_dir, path), start=os.curdir))
-
-        with open(args.json) as f:
-            files += [(int(addr, 0),
-                       process_json_file(f_name)) for addr, f_name in iteritems(json.load(f)['flash_files'])]
-
-    files = sorted([(addr, f_name.decode('utf-8') if isinstance(f_name, type(b'')) else f_name) for addr, f_name in iteritems(dict(files))],
-                   key=lambda x: x[0])  # remove possible duplicates and sort based on the address
-
-    cmd_args = {'output_file': args.output_file,
-                'files': files,
-                'pid': args.pid,
-                'part_size': args.part_size,
-                }
-
-    {'write': action_write
-     }[args.command](cmd_args)
+    install_exception_reporting()
+    cli()
 
 
 if __name__ == '__main__':

@@ -30,6 +30,7 @@
 #include "common/bt_target.h"
 #include "common/bt_defs.h"
 #include "osi/thread.h"
+#include "osi/fixed_pkt_queue.h"
 
 // HACK(zachoverflow): temporary dark magic
 #define BTU_POST_TO_TASK_NO_GOOD_HORRIBLE_HACK 0x1700 // didn't look used in bt_types...here goes nothing
@@ -118,12 +119,11 @@ typedef void (*tBTU_EVENT_CALLBACK)(BT_HDR *p_hdr);
 #define BTU_TTYPE_HSP2_SDP_RTRY_TO  56
 
 /* BTU internal */
-/* unused                           60 */
-
-#define BTU_TTYPE_AVDT_CCB_RET      61
-#define BTU_TTYPE_AVDT_CCB_RSP      62
-#define BTU_TTYPE_AVDT_CCB_IDLE     63
-#define BTU_TTYPE_AVDT_SCB_TC       64
+#define BTU_TTYPE_AVDT_SCB_DELAY_RPT 60
+#define BTU_TTYPE_AVDT_CCB_RET       61
+#define BTU_TTYPE_AVDT_CCB_RSP       62
+#define BTU_TTYPE_AVDT_CCB_IDLE      63
+#define BTU_TTYPE_AVDT_SCB_TC        64
 
 #define BTU_TTYPE_HID_DEV_REPAGE_TO 65
 #define BTU_TTYPE_HID_HOST_REPAGE_TO 66
@@ -167,6 +167,16 @@ typedef void (*tBTU_EVENT_CALLBACK)(BT_HDR *p_hdr);
 /* BTU internal timer for QOS */
 #define BTU_TTYPE_BTM_QOS                           110
 
+/* BTU internal timer for set page timeout*/
+#define BTU_TTYPE_BTM_SET_PAGE_TO                   111
+
+/* BTU internal timer for BR/EDR power control*/
+#define BTU_TTYPE_BTM_BREDR_PWR_CTRL                112
+
+/* L2CAP host-driven Create_Connection retry back-off timer */
+#define BTU_TTYPE_L2CAP_LINK_RETRY                  113
+#define BTU_TTYPE_ATT_WAIT_FOR_CONF                 114
+
 /* BTU Task Signal */
 typedef enum {
     SIG_BTU_START_UP = 0,
@@ -176,6 +186,7 @@ typedef enum {
     SIG_BTU_GENERAL_ALARM,
     SIG_BTU_ONESHOT_ALARM,
     SIG_BTU_L2CAP_ALARM,
+    SIG_BTU_HCI_ADV_RPT_MSG,
     SIG_BTU_NUM,
 } SIG_BTU_t;
 
@@ -196,6 +207,15 @@ typedef struct {
 #define BTU_MAX_REG_TIMER     (2)   /* max # timer callbacks which may register */
 #define BTU_MAX_REG_EVENT     (6)   /* max # event callbacks which may register */
 #define BTU_DEFAULT_DATA_SIZE (0x2a0)
+#define BTU_ACL_QUEUE_BATCH_SIZE (12)
+/* Local credit coalesce table: one entry per handle, capped by batch size. */
+#define BTU_ACL_CREDIT_COALESCE_CAP                                                                                    \
+    (((MAX_L2CAP_LINKS + BTM_MAX_SCO_LINKS) < BTU_ACL_QUEUE_BATCH_SIZE) ? (MAX_L2CAP_LINKS + BTM_MAX_SCO_LINKS)        \
+                                                                        : BTU_ACL_QUEUE_BATCH_SIZE)
+#define BTU_ACL_QUEUE_CAPACITY (L2CAP_HOST_FC_ACL_BUFS)
+#define BTU_ACL_QUEUE_ENQUEUE_TIMEOUT_MS (100)
+#define BTU_ACL_QUEUE_HIGH_WATER ((BTU_ACL_QUEUE_CAPACITY >> 2) + (BTU_ACL_QUEUE_CAPACITY >> 1))
+#define BTU_ACL_QUEUE_LOW_WATER  (BTU_ACL_QUEUE_CAPACITY >> 2)
 
 #if (BLE_INCLUDED == TRUE)
 #define BTU_DEFAULT_BLE_DATA_SIZE   (27)
@@ -224,6 +244,12 @@ typedef struct {
 typedef struct {
     tBTU_TIMER_REG   timer_reg[BTU_MAX_REG_TIMER];
     tBTU_EVENT_REG   event_reg[BTU_MAX_REG_EVENT];
+    fixed_pkt_queue_t *acl_pkt_queue;
+    struct osi_event *acl_data_ready;
+    BOOLEAN          acl_closing;
+#if (C2H_FLOW_CONTROL_INCLUDED == TRUE)
+    BOOLEAN          acl_c2h_congested;     /* sticky ACL high-water; HCI sets, BTU clears */
+#endif
 
     BOOLEAN     reset_complete;             /* TRUE after first ack from device received */
     UINT8       trace_level;                /* Trace level for HCI layer */
@@ -274,10 +300,7 @@ void btu_check_bt_sleep (void);
 */
 void  btu_hcif_process_event (UINT8 controller_id, BT_HDR *p_buf);
 void  btu_hcif_send_cmd (UINT8 controller_id, BT_HDR *p_msg);
-#if (BLE_50_FEATURE_SUPPORT == TRUE)
 UINT8  btu_hcif_send_cmd_sync (UINT8 controller_id, BT_HDR *p_buf);
-#endif // #if (BLE_50_FEATURE_SUPPORT == TRUE)
-void  btu_hcif_send_host_rdy_for_data(void);
 void  btu_hcif_cmd_timeout (UINT8 controller_id);
 
 /* Functions provided by btu_core.c
@@ -286,7 +309,7 @@ void  btu_hcif_cmd_timeout (UINT8 controller_id);
 void  btu_init_core(void);
 void  btu_free_core(void);
 
-void BTU_StartUp(void);
+bool BTU_StartUp(void);
 void BTU_ShutDown(void);
 
 void btu_task_start_up(void *param);
@@ -295,9 +318,18 @@ void btu_task_shut_down(void);
 UINT16 BTU_BleAclPktSize(void);
 
 bool btu_task_post(uint32_t sig, void *param, uint32_t timeout);
+bool btu_acl_queue_init(void);
+void btu_acl_queue_close(void);
+void btu_acl_queue_deinit(void);
+bool btu_hci_acl_data_post(BT_HDR *packet);
+#if (C2H_FLOW_CONTROL_INCLUDED == TRUE)
+BOOLEAN btu_c2h_acl_is_congested(void);
+void btu_c2h_credit_pause_if_congested(void);
+#endif
 
 int get_btu_work_queue_size(void);
 
+osi_thread_t *btu_get_current_thread(void);
 /*
 #ifdef __cplusplus
 }

@@ -1,153 +1,236 @@
-// Copyright 2015-2020 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <stdbool.h>
 #include "sdkconfig.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "esp_types.h"
-#include "esp_err.h"
-#include "esp_intr_alloc.h"
-#include "esp_attr.h"
-#include "esp_freertos_hooks.h"
-#include "soc/timer_periph.h"
-#include "driver/timer.h"
-#include "driver/periph_ctrl.h"
-#include "esp_int_wdt.h"
-#include "esp_private/system_internal.h"
-#include "hal/cpu_hal.h"
-#include "hal/timer_types.h"
+#include "soc/soc_caps.h"
 #include "hal/wdt_hal.h"
-#include "hal/interrupt_controller_hal.h"
+#include "soc/system_intr.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
+#include "esp_cpu.h"
+#include "esp_check.h"
+#include "esp_err.h"
+#include "esp_private/esp_system_attr.h"
+#include "esp_log.h"
+#include "esp_intr_alloc.h"
+#include "esp_chip_info.h"
+#include "esp_freertos_hooks.h"
+#include "esp_private/periph_ctrl.h"
+#include "esp_private/esp_int_wdt.h"
+#include "esp_private/esp_sys_event_app_init.h"
+#include "mwdt_priv.h"
+
+#if CONFIG_PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP && SOC_MWDT_SUPPORT_SLEEP_RETENTION
+#include "esp_private/sleep_retention.h"
+#endif
+
+#if CONFIG_ESP_INT_WDT && CONFIG_ESP32_ECO3_CACHE_LOCK_FIX
+#include "esp_private/eco3_livelock_workaround.h"
+#endif
+
+#if TIMG_LL_GET(INST_NUM) > 1
+
+/* If we have two hardware timer groups, use the second one for interrupt watchdog. */
+#define WDT_LEVEL_INTR_SOURCE   SYS_TG1_WDT_INTR_SOURCE
+#define IWDT_PRESCALER          MWDT_LL_DEFAULT_CLK_PRESCALER   // Tick period of 500us if WDT source clock is 80MHz
+#define IWDT_INSTANCE           WDT_MWDT1
+#define IWDT_PERIPH             PERIPH_TIMG1_MODULE
+#define IWDT_TIMER_GROUP        1
+
+#else
+
+#define WDT_LEVEL_INTR_SOURCE   SYS_TG0_WDT_INTR_SOURCE
+#define IWDT_PRESCALER          MWDT_LL_DEFAULT_CLK_PRESCALER   // Tick period of 500us if WDT source clock is 80MHz
+#define IWDT_INSTANCE           WDT_MWDT0
+#define IWDT_PERIPH             PERIPH_TIMG0_MODULE
+#define IWDT_TIMER_GROUP        0
+
+#endif // TIMG_LL_GET(INST_NUM) > 1
 
 #if CONFIG_ESP_INT_WDT
-
-#define WDT_INT_NUM ETS_T1_WDT_INUM
-
-#define IWDT_INSTANCE           WDT_MWDT1
-#define IWDT_PRESCALER          MWDT1_TICK_PRESCALER   //Tick period of 500us if WDT source clock is 80MHz
-#define IWDT_TICKS_PER_US       MWDT1_TICKS_PER_US
-#define IWDT_INITIAL_TIMEOUT_S  5
-static wdt_hal_context_t iwdt_context;
-
-#if CONFIG_ESP32_ECO3_CACHE_LOCK_FIX
-/*
- * This parameter is used to indicate the response time of Interrupt watchdog to
- * identify the live lock.
- */
-#define IWDT_LIVELOCK_TIMEOUT_MS    (20)
-
-extern uint32_t _l4_intr_livelock_counter, _l4_intr_livelock_max;
-#endif
-
-//Take care: the tick hook can also be called before esp_int_wdt_init() is called.
-#if CONFIG_ESP_INT_WDT_CHECK_CPU1
-//Not static; the ISR assembly checks this.
-bool int_wdt_app_cpu_ticked = false;
-
-static void IRAM_ATTR tick_hook(void)
+#if CONFIG_PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP && SOC_MWDT_SUPPORT_SLEEP_RETENTION
+ESP_LOG_ATTR_TAG(TAG, "int_wdt");
+static esp_err_t sleep_int_wdt_retention_init(void *arg)
 {
-    if (cpu_hal_get_core_id() != 0) {
-        int_wdt_app_cpu_ticked = true;
-    } else {
-        //Only feed wdt if app cpu also ticked.
-        if (int_wdt_app_cpu_ticked) {
-            //Todo: Check if there's a way to avoid reconfiguring the stages on each feed.
-            wdt_hal_write_protect_disable(&iwdt_context);
-            //Reconfigure stage timeouts
-#if CONFIG_ESP32_ECO3_CACHE_LOCK_FIX
-            _l4_intr_livelock_counter = 0;
-            wdt_hal_config_stage(&iwdt_context, WDT_STAGE0,
-                                 CONFIG_ESP_INT_WDT_TIMEOUT_MS * 1000 / IWDT_TICKS_PER_US / (_l4_intr_livelock_max + 1), WDT_STAGE_ACTION_INT);                    //Set timeout before interrupt
-#else
-            wdt_hal_config_stage(&iwdt_context, WDT_STAGE0, CONFIG_ESP_INT_WDT_TIMEOUT_MS * 1000 / IWDT_TICKS_PER_US, WDT_STAGE_ACTION_INT);          //Set timeout before interrupt
-#endif
-            wdt_hal_config_stage(&iwdt_context, WDT_STAGE1, 2 * CONFIG_ESP_INT_WDT_TIMEOUT_MS * 1000 / IWDT_TICKS_PER_US, WDT_STAGE_ACTION_RESET_SYSTEM); //Set timeout before reset
-            wdt_hal_feed(&iwdt_context);
-            wdt_hal_write_protect_enable(&iwdt_context);
-            int_wdt_app_cpu_ticked = false;
+    uint32_t group_id = *(uint32_t *)arg;
+    esp_err_t err = sleep_retention_entries_create(mwdt_reg_retention_info[group_id].regdma_entry_array,
+                                                   mwdt_reg_retention_info[group_id].array_size,
+                                                   REGDMA_LINK_PRI_SYS_PERIPH_LOW,
+                                                   (group_id == 0) ? SLEEP_RETENTION_MODULE_TG0_WDT : SLEEP_RETENTION_MODULE_TG1_WDT);
+    if (err == ESP_OK) {
+        ESP_LOGD(TAG, "Interrupt watchdog timer retention initialization");
+    }
+    ESP_RETURN_ON_ERROR(err, TAG, "Failed to create sleep retention linked list for interrupt watchdog timer");
+    return err;
+}
+
+static esp_err_t esp_int_wdt_retention_enable(uint32_t group_id)
+{
+    sleep_retention_module_init_param_t init_param = {
+        .cbs = { .create = { .handle = sleep_int_wdt_retention_init, .arg = &group_id } },
+        .attribute = SLEEP_RETENTION_MODULE_ATTR_ATTACH,
+        .depends = RETENTION_MODULE_BITMAP_INIT(CLOCK_SYSTEM)
+    };
+    esp_err_t err = sleep_retention_module_init((group_id == 0) ? SLEEP_RETENTION_MODULE_TG0_WDT : SLEEP_RETENTION_MODULE_TG1_WDT, &init_param);
+    if (err == ESP_OK) {
+        err = sleep_retention_module_allocate((group_id == 0) ? SLEEP_RETENTION_MODULE_TG0_WDT : SLEEP_RETENTION_MODULE_TG1_WDT);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to allocate sleep retention linked list for interrupt watchdog timer retention");
+        } else {
+            err = sleep_retention_module_attach((group_id == 0) ? SLEEP_RETENTION_MODULE_TG0_WDT : SLEEP_RETENTION_MODULE_TG1_WDT);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to attach sleep retention linked list for interrupt watchdog timer retention");
+            }
         }
     }
+    return err;
 }
-#else
-static void IRAM_ATTR tick_hook(void)
-{
-#if !CONFIG_FREERTOS_UNICORE
-    if (cpu_hal_get_core_id() != 0) {
-        return;
-    }
 #endif
-    //Todo: Check if there's a way to avoid reconfiguring the stages on each feed.
+
+static wdt_hal_context_t iwdt_context;
+static void ESP_SYSTEM_IRAM_ATTR reconfigure_ticks(uint32_t stage0_ticks, uint32_t stage1_ticks)
+{
     wdt_hal_write_protect_disable(&iwdt_context);
-    //Reconfigure stage timeouts
-    wdt_hal_config_stage(&iwdt_context, WDT_STAGE0, CONFIG_ESP_INT_WDT_TIMEOUT_MS * 1000 / IWDT_TICKS_PER_US, WDT_STAGE_ACTION_INT);          //Set timeout before interrupt
-    wdt_hal_config_stage(&iwdt_context, WDT_STAGE1, 2 * CONFIG_ESP_INT_WDT_TIMEOUT_MS * 1000 / IWDT_TICKS_PER_US, WDT_STAGE_ACTION_RESET_SYSTEM); //Set timeout before reset
+    wdt_hal_config_stage(&iwdt_context, WDT_STAGE0, stage0_ticks, WDT_STAGE_ACTION_INT);
+    wdt_hal_config_stage(&iwdt_context, WDT_STAGE1, stage1_ticks, WDT_STAGE_ACTION_RESET_SYSTEM);
     wdt_hal_feed(&iwdt_context);
     wdt_hal_write_protect_enable(&iwdt_context);
 }
+
+#if CONFIG_ESP_INT_WDT && CONFIG_ESP32_ECO3_CACHE_LOCK_FIX
+static portMUX_TYPE s_iwdt_configure_lock = portMUX_INITIALIZER_UNLOCKED;
+void ESP_SYSTEM_IRAM_ATTR esp_int_wdt_reconfigure_ticks(uint32_t stage0_ticks, uint32_t stage1_ticks)
+{
+    portENTER_CRITICAL_SAFE(&s_iwdt_configure_lock);
+    reconfigure_ticks(stage0_ticks, stage1_ticks);
+    portEXIT_CRITICAL_SAFE(&s_iwdt_configure_lock);
+}
 #endif
 
+#if CONFIG_ESP_INT_WDT_CHECK_CPU1
+volatile bool int_wdt_cpu1_ticked = false;
+/* Set while CPU1 is intentionally idle (e.g. tickless idle) and therefore not ticking. The CPU1
+ * liveness requirement is bypassed so CPU0 keeps feeding the watchdog (and stays protected). */
+static volatile bool s_int_wdt_cpu1_idle = false;
+#endif
+
+static void ESP_SYSTEM_IRAM_ATTR tick_hook(void)
+{
+    if (esp_cpu_get_core_id() != 0) {
+#if CONFIG_ESP_INT_WDT_CHECK_CPU1
+        int_wdt_cpu1_ticked = true;
+#endif
+        return;
+    }
+#if CONFIG_ESP_INT_WDT_CHECK_CPU1
+    if (int_wdt_cpu1_ticked || s_int_wdt_cpu1_idle) {
+        int_wdt_cpu1_ticked = false;
+    } else {
+        return;
+    }
+#endif
+#if CONFIG_ESP_INT_WDT && CONFIG_ESP32_ECO3_CACHE_LOCK_FIX
+    esp_int_wdt_set_livelock_params(CONFIG_ESP_INT_WDT_TIMEOUT_MS);
+    esp_int_wdt_reconfigure_ticks(esp_int_wdt_livelock_get_feed_stage0_ticks(), IWDT_STAGE1_TIMEOUT_US);
+#else
+    reconfigure_ticks(IWDT_STAGE0_TIMEOUT_US, IWDT_STAGE1_TIMEOUT_US);
+#endif
+}
 
 void esp_int_wdt_init(void)
 {
-    periph_module_enable(PERIPH_TIMG1_MODULE);
-    //The timer configs initially are set to 5 seconds, to make sure the CPU can start up. The tick hook sets
-    //it to their actual value.
+    PERIPH_RCC_ACQUIRE_ATOMIC(IWDT_PERIPH, ref_count) {
+        if (ref_count == 0) {
+            timg_ll_enable_bus_clock(IWDT_TIMER_GROUP, true);
+            timg_ll_reset_register(IWDT_TIMER_GROUP);
+        }
+    }
+    /*
+     * Initialize the WDT timeout stages. Note that the initial timeout is set to 5 seconds as variable startup times of
+     * each CPU can lead to a timeout. The tick hooks will set the WDT timers to the actual timeout.
+     * Todo: Fix this
+     */
     wdt_hal_init(&iwdt_context, IWDT_INSTANCE, IWDT_PRESCALER, true);
+    reconfigure_ticks(IWDT_INITIAL_TIMEOUT_US, IWDT_INITIAL_TIMEOUT_US);
+
     wdt_hal_write_protect_disable(&iwdt_context);
-    //1st stage timeout: interrupt
-    wdt_hal_config_stage(&iwdt_context, WDT_STAGE0, IWDT_INITIAL_TIMEOUT_S * 1000000 / IWDT_TICKS_PER_US, WDT_STAGE_ACTION_INT);
-    //2nd stage timeout: reset system
-    wdt_hal_config_stage(&iwdt_context, WDT_STAGE1, IWDT_INITIAL_TIMEOUT_S * 1000000 / IWDT_TICKS_PER_US, WDT_STAGE_ACTION_RESET_SYSTEM);
-    //Enable WDT
     wdt_hal_enable(&iwdt_context);
     wdt_hal_write_protect_enable(&iwdt_context);
+
+#if CONFIG_PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP && SOC_MWDT_SUPPORT_SLEEP_RETENTION
+    esp_int_wdt_retention_enable(IWDT_TIMER_GROUP);
+#endif
+
+#if CONFIG_ESP_INT_WDT && CONFIG_ESP32_ECO3_CACHE_LOCK_FIX
+    /*
+     * This is a workaround for issue WDT-3.15 in "ESP32 ECO and workarounds for
+     * Bugs" document.
+     */
+    esp_int_wdt_init_for_livelock_fix();
+    esp_int_wdt_set_livelock_params(CONFIG_ESP_INT_WDT_TIMEOUT_MS);
+#endif
 }
 
 void esp_int_wdt_cpu_init(void)
 {
-    assert((CONFIG_ESP_INT_WDT_TIMEOUT_MS >= (portTICK_PERIOD_MS << 1)) && "Interrupt watchdog timeout needs to meet twice the RTOS tick period!");
-    esp_register_freertos_tick_hook_for_cpu(tick_hook, cpu_hal_get_core_id());
-    ESP_INTR_DISABLE(WDT_INT_NUM);
-    intr_matrix_set(cpu_hal_get_core_id(), ETS_TG1_WDT_LEVEL_INTR_SOURCE, WDT_INT_NUM);
-
-    /* Set the type and priority to watch dog interrupts */
-#if SOC_CPU_HAS_FLEXIBLE_INTC
-    interrupt_controller_hal_set_int_type(WDT_INT_NUM, INTR_TYPE_LEVEL);
-    interrupt_controller_hal_set_int_level(WDT_INT_NUM, SOC_INTERRUPT_LEVEL_MEDIUM);
-#endif
-
-#if CONFIG_ESP32_ECO3_CACHE_LOCK_FIX
+    assert((CONFIG_ESP_INT_WDT_TIMEOUT_MS >= (portTICK_PERIOD_MS << 1)) && "Interrupt watchdog timeout needs to be at least twice the RTOS tick period!");
+    // Register tick hook for current CPU to feed the INT WDT
+    esp_register_freertos_tick_hook_for_cpu(tick_hook, esp_cpu_get_core_id());
     /*
-     * This is a workaround for issue 3.15 in "ESP32 ECO and workarounds for
-     * Bugs" document.
+     * Register INT WDT interrupt for current CPU. We do this manually as the timeout interrupt should call an assembly
+     * panic handler (see riscv/vector.S and xtensa_vectors.S).
      */
-    _l4_intr_livelock_counter = 0;
-    if (soc_has_cache_lock_bug()) {
-        assert((portTICK_PERIOD_MS << 1) <= IWDT_LIVELOCK_TIMEOUT_MS);
-        assert(CONFIG_ESP_INT_WDT_TIMEOUT_MS >= (IWDT_LIVELOCK_TIMEOUT_MS * 3));
-        _l4_intr_livelock_max = CONFIG_ESP_INT_WDT_TIMEOUT_MS / IWDT_LIVELOCK_TIMEOUT_MS - 1;
-    }
+    esp_intr_disable_source(ETS_INT_WDT_INUM);
+    esp_rom_route_intr_matrix(esp_cpu_get_core_id(), WDT_LEVEL_INTR_SOURCE, ETS_INT_WDT_INUM);
+#if SOC_CPU_HAS_FLEXIBLE_INTC
+    esp_cpu_intr_set_type(ETS_INT_WDT_INUM, INTR_TYPE_LEVEL);
+    esp_cpu_intr_set_priority(ETS_INT_WDT_INUM, SOC_INTERRUPT_LEVEL_MEDIUM);
 #endif
-
-    // We do not register a handler for the watchdog interrupt because:
-    // 1. Interrupt level 4 on Xtensa architecture is not servicable from C
-    // 2. Instead, we set the entry of watchdog interrupt to the panic handler, see riscv/vector.S and xtensa_vectors.S
-    ESP_INTR_ENABLE(WDT_INT_NUM);
+    esp_intr_enable_source(ETS_INT_WDT_INUM);
 }
 
-#endif
+ESP_PRE_SCHEDULER_HANDLER_REGISTER(init_int_wdt, 100)
+{
+    (void)user_arg;
+    (void)ctx;
+    esp_int_wdt_init();
+    return ESP_OK;
+}
+
+ESP_PRE_SCHEDULER_HANDLER_REGISTER_PER_CPU(init_int_wdt_cpu, 110)
+{
+    (void)user_arg;
+    (void)ctx;
+    esp_int_wdt_cpu_init();
+    return ESP_OK;
+}
+
+void ESP_SYSTEM_IRAM_ATTR esp_int_wdt_pause(void)
+{
+    wdt_hal_write_protect_disable(&iwdt_context);
+    wdt_hal_disable(&iwdt_context);
+    wdt_hal_write_protect_enable(&iwdt_context);
+}
+
+void ESP_SYSTEM_IRAM_ATTR esp_int_wdt_resume(void)
+{
+    wdt_hal_write_protect_disable(&iwdt_context);
+    wdt_hal_feed(&iwdt_context);
+    wdt_hal_enable(&iwdt_context);
+    wdt_hal_write_protect_enable(&iwdt_context);
+}
+
+#if CONFIG_ESP_INT_WDT_CHECK_CPU1
+void ESP_SYSTEM_IRAM_ATTR esp_int_wdt_pause_cpu1_checking(bool pause)
+{
+    s_int_wdt_cpu1_idle = pause;
+}
+#endif // CONFIG_ESP_INT_WDT_CHECK_CPU1
+
+#endif // CONFIG_ESP_INT_WDT

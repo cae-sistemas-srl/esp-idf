@@ -96,7 +96,10 @@ static int socket_send(const char *tag, const int sock, const char * data, const
     int to_write = len;
     while (to_write > 0) {
         int written = send(sock, data + (len - to_write), to_write, 0);
-        if (written < 0 && errno != EINPROGRESS && errno != EAGAIN && errno != EWOULDBLOCK) {
+        if (written < 0) {
+            if (errno == EINPROGRESS || errno == EAGAIN || errno == EWOULDBLOCK) {
+                continue;
+            }
             log_socket_error(tag, sock, errno, "Error occurred during sending");
             return -1;
         }
@@ -231,7 +234,7 @@ static void tcp_server_task(void *pvParameters)
 {
     static char rx_buffer[128];
     static const char *TAG = "nonblocking-socket-server";
-    xSemaphoreHandle *server_ready = pvParameters;
+    SemaphoreHandle_t *server_ready = pvParameters;
     struct addrinfo hints = { .ai_socktype = SOCK_STREAM };
     struct addrinfo *address_info;
     int listen_sock = INVALID_SOCK;
@@ -388,7 +391,7 @@ void app_main(void)
     ESP_ERROR_CHECK(example_connect());
 
 #ifdef CONFIG_EXAMPLE_TCP_SERVER
-    xSemaphoreHandle server_ready = xSemaphoreCreateBinary();
+    SemaphoreHandle_t server_ready = xSemaphoreCreateBinary();
     assert(server_ready);
     xTaskCreate(tcp_server_task, "tcp_server", 4096, &server_ready, 5, NULL);
     xSemaphoreTake(server_ready, portMAX_DELAY);

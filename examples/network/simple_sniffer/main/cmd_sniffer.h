@@ -8,6 +8,8 @@
 */
 #pragma once
 
+#include "esp_eth_driver.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -37,7 +39,7 @@ typedef enum {
     SNIFFER_WLAN_FILTER_MAX
 } sniffer_wlan_filter_t;
 
-void register_sniffer(void);
+void register_sniffer_cmd(void);
 esp_err_t sniffer_reg_eth_intf(esp_eth_handle_t eth_handle);
 
 #ifdef __cplusplus

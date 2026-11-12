@@ -1,16 +1,8 @@
-// Copyright 2019 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2019-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #pragma once
 
@@ -24,20 +16,23 @@ extern "C" {
  * @brief add virtual filesystem semihosting driver
  *
  * @param base_path VFS path to mount host directory
- * @param host_path host path to mount; if NULL default dirctory will be used (see OpenOCD configuration)
  * @return
  *      - ESP_OK on success
- *      - ESP_ERR_INVALID_ARG if esp_vfs_semihost_register was already called for specified VFS path
- *      - ESP_ERR_NO_MEM if there are no slots to register new mount point
+ *      - ESP_ERR_INVALID_ARG if base_path is NULL or not a valid VFS path prefix
+ *      - ESP_ERR_INVALID_STATE if a VFS is already registered at base_path
+ *      - ESP_ERR_NOT_SUPPORTED if no debugger is attached
+ *      - ESP_ERR_NO_MEM if there are no free VFS slots
  */
-esp_err_t esp_vfs_semihost_register(const char* base_path, const char* host_path);
+esp_err_t esp_vfs_semihost_register(const char* base_path);
 
 /**
  * @brief Un-register semihosting driver from VFS
  *
+ * @param base_path VFS path previously passed to esp_vfs_semihost_register
  * @return
  *      - ESP_OK on success
- *      - ESP_ERR_INVALID_ARG if semihosting driver is not registered in VFS at that path
+ *      - ESP_ERR_INVALID_ARG if base_path is NULL, or the VFS at base_path is not the semihosting driver
+ *      - ESP_ERR_INVALID_STATE if no VFS is registered at base_path
  */
 esp_err_t esp_vfs_semihost_unregister(const char* base_path);
 

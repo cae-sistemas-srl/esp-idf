@@ -1,39 +1,25 @@
 #!/usr/bin/env python
 #
-# Copyright 2018 Espressif Systems (Shanghai) PTE LTD
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-from __future__ import print_function, unicode_literals
+# SPDX-FileCopyrightText: 2018-2022 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 
 import argparse
+import errno
 import http.client
-from builtins import str
-
-from tiny_test_fw import Utility
+import logging
 
 
 def verbose_print(verbosity, *args):
-    if (verbosity):
-        Utility.console_log(''.join(str(elems) for elems in args))
+    if verbosity:
+        logging.info(''.join(str(elems) for elems in args))
 
 
 def test_val(text, expected, received):
     if expected != received:
-        Utility.console_log(' Fail!')
-        Utility.console_log('  [reason] ' + text + ':')
-        Utility.console_log('        expected: ' + str(expected))
-        Utility.console_log('        received: ' + str(received))
+        logging.info(' Fail!')
+        logging.info(f'  [reason] {text} :')
+        logging.info(f'        expected: {expected}')
+        logging.info(f'        received: {received}')
         return False
     return True
 
@@ -46,7 +32,7 @@ def test_get_handler(ip, port, verbosity=False):
 
     uri = '/hello?query1=value1&query2=value2&query3=value3'
     # GET hello response
-    test_headers = {'Test-Header-1':'Test-Value-1', 'Test-Header-2':'Test-Value-2'}
+    test_headers = {'Test-Header-1': 'Test-Value-1', 'Test-Header-2': 'Test-Value-2'}
     verbose_print(verbosity, 'Sending GET to URI : ', uri)
     verbose_print(verbosity, 'Sending additional headers : ')
     for k, v in test_headers.items():
@@ -59,10 +45,10 @@ def test_get_handler(ip, port, verbosity=False):
     sess.close()
 
     if not (
-        test_val('Status code mismatch', 200, resp.status) and
-        test_val('Response mismatch', 'Custom-Value-1', resp.getheader('Custom-Header-1')) and
-        test_val('Response mismatch', 'Custom-Value-2', resp.getheader('Custom-Header-2')) and
-        test_val('Response mismatch', 'Hello World!', resp_data)
+        test_val('Status code mismatch', 200, resp.status)
+        and test_val('Response mismatch', 'Custom-Value-1', resp.getheader('Custom-Header-1'))
+        and test_val('Response mismatch', 'Custom-Value-2', resp.getheader('Custom-Header-2'))
+        and test_val('Response mismatch', 'Hello World!', resp_data)
     ):
         return False
 
@@ -158,6 +144,11 @@ def test_put_handler(ip, port, verbosity=False):
         except http.client.HTTPException:
             # Catch socket error as we tried to communicate with an already closed socket
             pass
+        except OSError as err:
+            if err.errno == errno.EPIPE:
+                # Sometimes Broken Pipe error is returned
+                # when sending data to a closed socket
+                pass
 
     except http.client.HTTPException:
         verbose_print(verbosity, 'Socket closed by server')
@@ -206,7 +197,7 @@ def test_put_handler(ip, port, verbosity=False):
             raise AssertionError
 
         verbose_print(verbosity, 'Response on GET /invalid : ' + resp_data)
-        if not test_val('Response mismatch', 'This URI does not exist', resp_data):
+        if not test_val('Response mismatch', 'Nothing matches the given URI', resp_data):
             raise AssertionError
 
     except http.client.HTTPException:
@@ -249,19 +240,17 @@ def test_custom_uri_query(ip, port, query, verbosity=False):
 if __name__ == '__main__':
     # Configure argument parser
     parser = argparse.ArgumentParser(description='Run HTTPd Test')
-    parser.add_argument('IP',   metavar='IP',      type=str, help='Server IP')
-    parser.add_argument('port', metavar='port',    type=str, help='Server port')
-    parser.add_argument('msg',  metavar='message', type=str, help='Message to be sent to server')
+    parser.add_argument('IP', metavar='IP', type=str, help='Server IP')
+    parser.add_argument('port', metavar='port', type=str, help='Server port')
+    parser.add_argument('msg', metavar='message', type=str, help='Message to be sent to server')
     args = vars(parser.parse_args())
 
     # Get arguments
-    ip   = args['IP']
+    ip = args['IP']
     port = args['port']
-    msg  = args['msg']
+    msg = args['msg']
 
     if not (
-        test_get_handler(ip, port, True) and
-        test_put_handler(ip, port, True) and
-        test_post_handler(ip, port, msg, True)
+        test_get_handler(ip, port, True) and test_put_handler(ip, port, True) and test_post_handler(ip, port, msg, True)
     ):
-        Utility.console_log('Failed!')
+        logging.info('Failed!')

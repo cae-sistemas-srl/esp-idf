@@ -1,16 +1,8 @@
-// Copyright 2015-2019 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #pragma once
 
@@ -21,12 +13,12 @@ extern "C" {
 #ifndef __ASSEMBLER__
 
 #include <stdbool.h>
+#include "sdkconfig.h"
 #include "esp_err.h"
-#include "soc/soc.h"  // [refactor-todo] IDF-2297
 #include "esp_cpu.h"
 
-/*
- * @brief   Structure used for backtracing
+/**
+ * @brief Structure used for backtracing.
  *
  * This structure stores the backtrace information of a particular stack frame
  * (i.e. the PC and SP). This structure is used iteratively with the
@@ -34,14 +26,14 @@ extern "C" {
  * single stack. The next_pc represents the PC of the current frame's caller, thus
  * a next_pc of 0 indicates that the current frame is the last frame on the stack.
  *
- * @note    Call esp_backtrace_get_start() to obtain initialization values for
- *          this structure
+ * @note Call esp_backtrace_get_start() to obtain initialization values for
+ *       this structure.
  */
 typedef struct {
-    uint32_t pc;       /* PC of the current frame */
-    uint32_t sp;       /* SP of the current frame */
-    uint32_t next_pc;  /* PC of the current frame's caller */
-    const void *exc_frame;  /* Pointer to the full frame data structure, if applicable */
+    uint32_t pc;              /**< PC of the current frame */
+    uint32_t sp;              /**< SP of the current frame */
+    uint32_t next_pc;         /**< PC of the current frame's caller */
+    const void *exc_frame;    /**< Pointer to the full frame data structure, if applicable */
 } esp_backtrace_frame_t;
 
 /**
@@ -104,12 +96,18 @@ bool esp_backtrace_get_next_frame(esp_backtrace_frame_t *frame);
  *      - ESP_OK    Backtrace successfully printed to completion or to depth limit
  *      - ESP_FAIL  Backtrace is corrupted
  */
-esp_err_t IRAM_ATTR esp_backtrace_print_from_frame(int depth, const esp_backtrace_frame_t* frame, bool panic);
+esp_err_t esp_backtrace_print_from_frame(int depth, const esp_backtrace_frame_t* frame, bool panic);
 
 /**
  * @brief Print the backtrace of the current stack
  *
  * @param depth The maximum number of stack frames to print (should be > 0)
+ *
+ * @note On RISC-V targets printing a backtrace at run-time is only available if
+ *       CONFIG_ESP_SYSTEM_USE_EH_FRAME or CONFIG_ESP_SYSTEM_USE_FRAME_POINTER is
+ *       selected. Otherwise we simply print a register dump. Function assumes it is
+ *       called in a context where the calling task will not migrate to another core,
+ *       e.g. interrupt context or panic handler.
  *
  * @return
  *      - ESP_OK    Backtrace successfully printed to completion or to depth limit
@@ -118,12 +116,35 @@ esp_err_t IRAM_ATTR esp_backtrace_print_from_frame(int depth, const esp_backtrac
 esp_err_t esp_backtrace_print(int depth);
 
 /**
+ * @brief Print the backtrace of all tasks
+ *
+ * @param depth The maximum number of stack frames to print (must be > 0)
+ *
+ * @note Users must ensure that no tasks are created or deleted while this function is running.
+ * @note This function must be called from a task context.
+ * @note On RISC-V targets, the 'depth' argument is not honored and the output depends on the
+ *       selected backtracing method (ESP_BACKTRACING_METHOD):
+ *       - CONFIG_ESP_SYSTEM_USE_FRAME_POINTER or CONFIG_ESP_SYSTEM_USE_EH_FRAME: a full
+ *         backtrace is printed for each task (the unwinders always unwind to completion).
+ *       - Otherwise (no backtracing method selected): only a register dump is printed.
+ *       Because the underlying RISC-V print routines do not report frame corruption,
+ *       this function does not return ESP_FAIL on corrupt stacks.
+ *
+ * @return
+ *      - ESP_OK              All backtraces printed
+ *      - ESP_ERR_INVALID_ARG depth was <= 0
+ *      - ESP_ERR_NO_MEM      Failed to allocate the task snapshot buffer
+ *      - ESP_FAIL            One or more backtraces are corrupt (Xtensa only)
+ */
+esp_err_t esp_backtrace_print_all_tasks(int depth);
+
+/**
  * @brief Set a watchpoint to break/panic when a certain memory range is accessed.
  * Superseded by esp_cpu_set_watchpoint in esp_cpu.h.
  */
 static inline __attribute__((deprecated)) esp_err_t esp_set_watchpoint(int no, void *adr, int size, int flags)
 {
-    return esp_cpu_set_watchpoint(no, adr, size, flags);
+    return esp_cpu_set_watchpoint(no, adr, size, (esp_cpu_watchpoint_trigger_t)flags);
 }
 
 /**

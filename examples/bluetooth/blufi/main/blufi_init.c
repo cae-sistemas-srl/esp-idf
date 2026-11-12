@@ -1,17 +1,25 @@
+/*
+ * SPDX-FileCopyrightText: 2021-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Unlicense OR CC0-1.0
+ */
+
 #include <stdio.h>
 #include "esp_err.h"
 #include "esp_blufi_api.h"
 #include "esp_log.h"
 #include "esp_blufi.h"
-#ifdef CONFIG_BT_BLUEDROID_ENABLED
-#include "esp_bt.h"
-#include "esp_bt_main.h"
 #include "blufi_example.h"
+#if CONFIG_BT_CONTROLLER_ENABLED || !CONFIG_BT_NIMBLE_ENABLED
+#include "esp_bt.h"
+#endif
+#ifdef CONFIG_BT_BLUEDROID_ENABLED
+#include "esp_bt_main.h"
 #include "esp_bt_device.h"
+#include "esp_gap_ble_api.h"
 #endif
 
 #ifdef CONFIG_BT_NIMBLE_ENABLED
-#include "esp_nimble_hci.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
@@ -25,7 +33,8 @@
 esp_err_t esp_blufi_host_init(void)
 {
     int ret;
-    ret = esp_bluedroid_init();
+    esp_bluedroid_config_t cfg = BT_BLUEDROID_INIT_CONFIG_DEFAULT();
+    ret = esp_bluedroid_init_with_cfg(&cfg);
     if (ret) {
         BLUFI_ERROR("%s init bluedroid failed: %s\n", __func__, esp_err_to_name(ret));
         return ESP_FAIL;
@@ -38,34 +47,174 @@ esp_err_t esp_blufi_host_init(void)
     }
     BLUFI_INFO("BD ADDR: "ESP_BD_ADDR_STR"\n", ESP_BD_ADDR_HEX(esp_bt_dev_get_address()));
 
+    /* Set the default device name */
+    ret = esp_ble_gap_set_device_name(BLUFI_DEVICE_NAME);
+    if (ret) {
+        BLUFI_ERROR("%s set device name failed: %s\n", __func__, esp_err_to_name(ret));
+        return ESP_FAIL;
+    }
+
     return ESP_OK;
 
 }
 
-int esp_blufi_gap_register_callback(void)
+#ifdef CONFIG_EXAMPLE_BLUFI_BLE_SMP_ENABLE
+
+void esp_blufi_set_ble_security_params(void)
+{
+    /* set the security iocap & auth_req & key size & init key response key parameters to the stack*/
+    esp_ble_auth_req_t auth_req = ESP_LE_AUTH_REQ_SC_MITM; // Secure Connections with MITM protection (no bonding)
+    esp_ble_io_cap_t iocap = ESP_IO_CAP_OUT;               // IO capability: DisplayOnly
+    uint8_t key_size = 16;      //the key size should be 7~16 bytes
+    uint8_t init_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
+    uint8_t rsp_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
+    //set static passkey
+    uint32_t passkey = 123456;
+    uint8_t auth_option = ESP_BLE_ONLY_ACCEPT_SPECIFIED_AUTH_ENABLE;
+    uint8_t oob_support = ESP_BLE_OOB_DISABLE;
+    BLUFI_INFO("BLE SMP passkey: %06" PRIu32 " (WARNING: Change this default value for production or don't use static passkey!)\n", passkey);
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_STATIC_PASSKEY, &passkey, sizeof(uint32_t));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE, &auth_req, sizeof(uint8_t));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE, &iocap, sizeof(uint8_t));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_MAX_KEY_SIZE, &key_size, sizeof(uint8_t));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_ONLY_ACCEPT_SPECIFIED_SEC_AUTH, &auth_option, sizeof(uint8_t));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_OOB_SUPPORT, &oob_support, sizeof(uint8_t));
+    /* If your BLE device acts as a Slave, the init_key means you hope which types of key of the master should distribute to you,
+    and the response key means which key you can distribute to the master;
+    If your BLE device acts as a master, the response key means you hope which types of key of the slave should distribute to you,
+    and the init key means which key you can distribute to the slave. */
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY, &init_key, sizeof(uint8_t));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY, &rsp_key, sizeof(uint8_t));
+}
+
+#endif // #if CONFIG_EXAMPLE_BLUFI_BLE_SMP_ENABLE
+
+esp_err_t esp_blufi_host_deinit(void)
+{
+    int ret;
+    ret = esp_blufi_profile_deinit();
+    if(ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = esp_bluedroid_disable();
+    if (ret) {
+        BLUFI_ERROR("%s deinit bluedroid failed: %s\n", __func__, esp_err_to_name(ret));
+        return ESP_FAIL;
+    }
+
+    ret = esp_bluedroid_deinit();
+    if (ret) {
+        BLUFI_ERROR("%s deinit bluedroid failed: %s\n", __func__, esp_err_to_name(ret));
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+
+}
+
+esp_err_t esp_blufi_gap_register_callback(void)
 {
    int rc;
    rc = esp_ble_gap_register_callback(esp_blufi_gap_event_handler);
     if(rc){
         return rc;
     }
-    esp_blufi_profile_init();
-    return 0;
+    return esp_blufi_profile_init();
+}
+
+esp_err_t esp_blufi_host_and_cb_init(esp_blufi_callbacks_t *example_callbacks)
+{
+    esp_err_t ret = ESP_OK;
+
+    ret = esp_blufi_host_init();
+    if (ret) {
+        BLUFI_ERROR("%s initialise host failed: %s\n", __func__, esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = esp_blufi_register_callbacks(example_callbacks);
+    if(ret){
+        BLUFI_ERROR("%s blufi register failed, error code = %x\n", __func__, ret);
+        return ret;
+    }
+
+    ret = esp_blufi_gap_register_callback();
+    if(ret){
+        BLUFI_ERROR("%s gap register failed, error code = %x\n", __func__, ret);
+        return ret;
+    }
+
+    #ifdef CONFIG_EXAMPLE_BLUFI_BLE_SMP_ENABLE
+    esp_blufi_set_ble_security_params();
+    #endif // CONFIG_EXAMPLE_BLUFI_BLE_SMP_ENABLE
+
+    return ESP_OK;
 }
 
 #endif /* CONFIG_BT_BLUEDROID_ENABLED */
+
+#if CONFIG_BT_CONTROLLER_ENABLED || !CONFIG_BT_NIMBLE_ENABLED
+esp_err_t esp_blufi_controller_init() {
+    esp_err_t ret = ESP_OK;
+#if CONFIG_IDF_TARGET_ESP32
+    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
+#endif
+
+    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    ret = esp_bt_controller_init(&bt_cfg);
+    if (ret) {
+        BLUFI_ERROR("%s initialize bt controller failed: %s\n", __func__, esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = esp_bt_controller_enable(ESP_BT_MODE_BLE);
+    if (ret) {
+        BLUFI_ERROR("%s enable bt controller failed: %s\n", __func__, esp_err_to_name(ret));
+        return ret;
+    }
+    return ret;
+}
+#endif
+
+#if CONFIG_BT_CONTROLLER_ENABLED || !CONFIG_BT_NIMBLE_ENABLED
+esp_err_t esp_blufi_controller_deinit() {
+    esp_err_t ret = ESP_OK;
+    ret = esp_bt_controller_disable();
+    if (ret) {
+        BLUFI_ERROR("%s disable bt controller failed: %s\n", __func__, esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = esp_bt_controller_deinit();
+    if (ret) {
+        BLUFI_ERROR("%s deinit bt controller failed: %s\n", __func__, esp_err_to_name(ret));
+        return ret;
+    }
+
+    return ret;
+}
+#endif
 
 #ifdef CONFIG_BT_NIMBLE_ENABLED
 void ble_store_config_init(void);
 static void blufi_on_reset(int reason)
 {
     MODLOG_DFLT(ERROR, "Resetting state; reason=%d\n", reason);
+#if !SOC_MPI_SUPPORTED
+    blufi_example_on_reset();
+#endif
 }
 
 static void
 blufi_on_sync(void)
 {
-  esp_blufi_profile_init();
+    esp_blufi_profile_init();
+#if !SOC_MPI_SUPPORTED
+    /* Host is synced here, including after ble_hs_reset(). Profile init does
+     * not emit INIT_FINISH again once the profile is enabled. */
+    blufi_example_on_sync();
+#endif
 }
 
 void bleprph_host_task(void *param)
@@ -79,14 +228,22 @@ void bleprph_host_task(void *param)
 
 esp_err_t esp_blufi_host_init(void)
 {
-   ESP_ERROR_CHECK(esp_nimble_hci_init());
-   nimble_port_init();
+    esp_err_t err;
+    err = esp_nimble_init();
+    if (err) {
+        BLUFI_ERROR("%s failed: %s\n", __func__, esp_err_to_name(err));
+        return ESP_FAIL;
+    }
+
 /* Initialize the NimBLE host configuration. */
     ble_hs_cfg.reset_cb = blufi_on_reset;
     ble_hs_cfg.sync_cb = blufi_on_sync;
     ble_hs_cfg.gatts_register_cb = esp_blufi_gatt_svr_register_cb;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
 
+    /* BLUFI uses its own application-layer security (DH + AES), not BLE Security
+     * Manager.  sm_mitm/sm_sc/sm_bonding are opt-in via Kconfig; Just Works
+     * pairing is acceptable because the DH key exchange provides the security. */
     ble_hs_cfg.sm_io_cap = 4;
 #ifdef CONFIG_EXAMPLE_BONDING
     ble_hs_cfg.sm_bonding = 1;
@@ -106,23 +263,97 @@ esp_err_t esp_blufi_host_init(void)
 
     int rc;
     rc = esp_blufi_gatt_svr_init();
-    assert(rc == 0);
+    if (rc != 0) {
+        BLUFI_ERROR("%s gatt svr init failed: %d\n", __func__, rc);
+        if (rc == BLE_HS_ENOMEM || rc == BLE_ATT_ERR_INSUFFICIENT_RES) {
+            return ESP_ERR_NO_MEM;
+        }
+        return ESP_FAIL;
+    }
 
+#if CONFIG_BT_NIMBLE_GAP_SERVICE
     /* Set the default device name. */
     rc = ble_svc_gap_device_name_set(BLUFI_DEVICE_NAME);
-    assert(rc == 0);
+    if (rc != 0) {
+        BLUFI_ERROR("%s device name set failed: %d\n", __func__, rc);
+        esp_blufi_gatt_svr_deinit();
+        return (rc == BLE_HS_ENOMEM) ? ESP_ERR_NO_MEM : ESP_FAIL;
+    }
+#endif
 
     /* XXX Need to have template for store */
     ble_store_config_init();
 
-    nimble_port_freertos_init(bleprph_host_task);
-    esp_blufi_btc_init();
+    err = esp_blufi_btc_init();
+    if (err != ESP_OK) {
+        BLUFI_ERROR("%s btc init failed: %s\n", __func__, esp_err_to_name(err));
+        esp_blufi_gatt_svr_deinit();
+        return err;
+    }
+
+    err = esp_nimble_enable(bleprph_host_task);
+    if (err) {
+        BLUFI_ERROR("%s failed: %s\n", __func__, esp_err_to_name(err));
+        return ESP_FAIL;
+    }
+
     return ESP_OK;
 }
 
-int esp_blufi_gap_register_callback(void)
+esp_err_t esp_blufi_host_deinit(void)
 {
-    return 0;
+    esp_err_t ret = ESP_OK;
+
+    ret = nimble_port_stop();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    esp_blufi_gatt_svr_deinit();
+
+    if (ret == 0) {
+        esp_nimble_deinit();
+    }
+
+    ret = esp_blufi_profile_deinit();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    esp_blufi_btc_deinit();
+
+    return ret;
 }
+
+esp_err_t esp_blufi_gap_register_callback(void)
+{
+    return ESP_OK;
+}
+
+esp_err_t esp_blufi_host_and_cb_init(esp_blufi_callbacks_t *example_callbacks)
+{
+    esp_err_t ret = ESP_OK;
+
+    ret = esp_blufi_register_callbacks(example_callbacks);
+    if(ret){
+        BLUFI_ERROR("%s blufi register failed, error code = %x\n", __func__, ret);
+        return ret;
+    }
+
+    ret = esp_blufi_gap_register_callback();
+    if(ret){
+        BLUFI_ERROR("%s gap register failed, error code = %x\n", __func__, ret);
+        return ret;
+    }
+
+    ret = esp_blufi_host_init();
+    if (ret) {
+        BLUFI_ERROR("%s initialise host failed: %s\n", __func__, esp_err_to_name(ret));
+        return ret;
+    }
+
+    return ret;
+}
+
 
 #endif /* CONFIG_BT_NIMBLE_ENABLED */

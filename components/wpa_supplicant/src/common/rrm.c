@@ -10,6 +10,7 @@
 
 #include "utils/common.h"
 #include "utils/bitfield.h"
+#include "utils/eloop.h"
 #include "common/ieee802_11_defs.h"
 #include "common/ieee802_11_common.h"
 #include "wpa_supplicant_i.h"
@@ -149,12 +150,9 @@ int wpas_rrm_send_neighbor_rep_request(struct wpa_supplicant *wpa_s,
 
 	/* Refuse if there's a live request */
 	if (wpa_s->rrm.notify_neighbor_rep) {
-		wpas_rrm_neighbor_rep_timeout_handler(&wpa_s->rrm, NULL);
-#if 0
 		wpa_dbg(wpa_s, MSG_DEBUG,
 			"RRM: Currently handling previous Neighbor Report.");
 		return -EBUSY;
-#endif
 	}
 
 	/* 3 = action category + action code + dialog token */
@@ -851,8 +849,15 @@ wpas_rm_handle_beacon_req(struct wpa_supplicant *wpa_s,
 		goto out;
 	}
 	params->channel = req->channel;
+#ifdef ESP_SUPPLICANT
+	if (params->channel == 0xff) {
+		/* set it to zero */
+		params->channel = 0;
+	}
+#endif
 	params->duration = le_to_host16(req->duration);
 	params->duration_mandatory = duration_mandatory;
+	params->mode = req->mode;
 	if (!params->duration) {
 		wpa_printf(MSG_DEBUG, "Beacon request: Duration is 0");
 		ret = -1;
@@ -957,7 +962,6 @@ wpas_rrm_process_msr_req_elems(struct wpa_supplicant *wpa_s, const u8 *pos,
 			wpa_printf(MSG_DEBUG,
 				   "RRM: Expected Measurement Request element, but EID is %u",
 				   req->eid);
-			printf("len is %d", len);
 			goto out;
 		}
 

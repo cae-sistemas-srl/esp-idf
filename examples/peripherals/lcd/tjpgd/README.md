@@ -1,3 +1,6 @@
+| Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-C61 | ESP32-H2 | ESP32-H21 | ESP32-H4 | ESP32-P4 | ESP32-S2 | ESP32-S3 | ESP32-S31 |
+| ----------------- | ----- | -------- | -------- | -------- | -------- | --------- | -------- | --------- | -------- | -------- | -------- | -------- | --------- |
+
 ## LCD tjpgd example
 
 (See the README.md file in the upper level 'examples' directory for more information about examples.)
@@ -5,8 +8,6 @@
 ## Overview
 
 This example shows how to decode a jpeg image and display it on an SPI-interfaced LCD, and rotates the image periodically.
-
-Due to the fact that ESP32S2 and ESP32C3 don't have enough memory to hold the decoded image, the graphic shown on the LCD is calculated randomly and has nothing to do with the picture in the example project.
 
 If you want to adapt this example to another type of display or pinout, check [lcd_tjpgd_example_main.c](main/lcd_tjpgd_example_main.c) for comments with some implementation details.
 

@@ -1,4 +1,5 @@
 idf_build_get_property(target IDF_TARGET)
+idf_build_get_property(non_os_build NON_OS_BUILD)
 
 if(CONFIG_EFUSE_VIRTUAL)
     message(STATUS "Efuse virtual mode is enabled. If Secure boot or Flash encryption is on"
@@ -13,19 +14,64 @@ if(EXISTS "${COMPONENT_DIR}/${target}")
     add_prefix(srcs "${target}/" ${EFUSE_SOC_SRCS})
 endif()
 
-list(APPEND srcs "src/esp_efuse_api.c"
-                 "src/esp_efuse_fields.c"
-                 "src/esp_efuse_utility.c")
-if("esp32" STREQUAL "${target}")
-    list(APPEND srcs "src/esp_efuse_api_key_esp32.c")
+if(CONFIG_SOC_EFUSE_KEY_PURPOSE_FIELD)
+    set(type "with_key_purposes")
 else()
-    list(APPEND srcs "src/esp_efuse_api_key_esp32xx.c")
+    if(CONFIG_SOC_EFUSE_CONSISTS_OF_ONE_KEY_BLOCK)
+        set(type "without_key_purposes/one_key_block")
+    else()
+        set(type "without_key_purposes/three_key_blocks")
+    endif()
 endif()
 
-idf_component_register(SRCS "${srcs}"
-                    PRIV_REQUIRES bootloader_support soc spi_flash
+list(APPEND srcs "src/esp_efuse_api.c"
+                 "src/esp_efuse_dump.c"
+                 "src/esp_efuse_fields.c"
+                 "src/esp_efuse_utility.c"
+                 "src/efuse_controller/keys/${type}/esp_efuse_api_key.c")
+
+if(non_os_build)
+    idf_component_register(SRCS "${srcs}"
+                    PRIV_REQUIRES bootloader_support soc esp_hal_security
                     INCLUDE_DIRS "${include_dirs}"
                     PRIV_INCLUDE_DIRS "${private_include}")
+else()
+    list(APPEND srcs "src/esp_efuse_startup.c")
+    set(priv_requires soc esp_system esp_hal_security)
+    if(NOT ${target} STREQUAL "linux" AND NOT IDF_BUILD_V2)
+        list(APPEND priv_requires esp_app_format bootloader_support)
+    endif()
+    if(NOT IDF_BUILD_V2)
+        # V1 resolves requirements before Kconfig is available.
+        list(APPEND priv_requires esp_partition)
+    endif()
+    idf_component_register(SRCS "${srcs}"
+                    PRIV_REQUIRES "${priv_requires}"
+                    INCLUDE_DIRS "${include_dirs}"
+                    PRIV_INCLUDE_DIRS "${private_include}")
+    if(IDF_BUILD_V2)
+        if(CONFIG_EFUSE_VIRTUAL_KEEP_IN_FLASH)
+            idf_component_include(esp_partition)
+            target_link_libraries(${COMPONENT_LIB} PRIVATE idf::esp_partition)
+        endif()
+        if(NOT ${target} STREQUAL "linux")
+            if(CONFIG_EFUSE_VIRTUAL_KEEP_IN_FLASH OR CONFIG_SECURE_BOOT OR
+               CONFIG_SECURE_FLASH_ENC_ENABLED OR CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT)
+                idf_component_include(bootloader_support)
+                target_link_libraries(${COMPONENT_LIB} PRIVATE idf::bootloader_support)
+            endif()
+            if(CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK)
+                idf_component_include(esp_app_format)
+                target_link_libraries(${COMPONENT_LIB} PRIVATE idf::esp_app_format)
+            endif()
+        endif()
+    endif()
+    idf_define_esp_err_codes(HEADERS include/esp_efuse.h)
+    if(NOT ${target} STREQUAL "linux")
+        # Forces the linker to include esp_efuse_startup.c
+        target_link_libraries(${COMPONENT_LIB} INTERFACE "-u esp_efuse_startup_include_func")
+    endif()
+endif()
 
 if(target)
     set(TOOL_TARGET -t ${target})
@@ -39,9 +85,10 @@ idf_build_get_property(python PYTHON)
 # Make common files esp_efuse_table.c and include/esp_efuse_table.h files.
 set(EFUSE_COMMON_TABLE_CSV_PATH "${COMPONENT_DIR}/${target}/esp_efuse_table.csv")
 
-add_custom_target(efuse_common_table COMMAND "${python}"
+add_custom_target(efuse-common-table COMMAND "${python}"
                  "${CMAKE_CURRENT_SOURCE_DIR}/efuse_table_gen.py"
                  ${EFUSE_COMMON_TABLE_CSV_PATH} ${GEN_EFUSE_TABLE_ARG})
+add_deprecated_target_alias(efuse_common_table efuse-common-table)
 
 ###################
 # Make custom files project/main/esp_efuse_custom_table.c and project/main/include/esp_efuse_custom_table.h files.
@@ -51,15 +98,18 @@ if(${CONFIG_EFUSE_CUSTOM_TABLE})
     idf_build_get_property(project_dir PROJECT_DIR)
     get_filename_component(EFUSE_CUSTOM_TABLE_CSV_PATH "${CONFIG_EFUSE_CUSTOM_TABLE_FILENAME}"
                            ABSOLUTE BASE_DIR "${project_dir}")
-    add_custom_target(efuse_custom_table COMMAND "${python}" "${CMAKE_CURRENT_SOURCE_DIR}/efuse_table_gen.py"
+    add_custom_target(efuse-custom-table COMMAND "${python}" "${CMAKE_CURRENT_SOURCE_DIR}/efuse_table_gen.py"
                            ${EFUSE_COMMON_TABLE_CSV_PATH} ${EFUSE_CUSTOM_TABLE_CSV_PATH} ${GEN_EFUSE_TABLE_ARG})
+    add_deprecated_target_alias(efuse_custom_table efuse-custom-table)
 else()
-    add_custom_target(efuse_custom_table COMMAND)
+    add_custom_target(efuse-custom-table COMMAND)
+    add_deprecated_target_alias(efuse_custom_table efuse-custom-table)
 endif()#if(${CONFIG_EFUSE_CUSTOM_TABLE})
 
-add_custom_target(show_efuse_table COMMAND "${python}"
+add_custom_target(show-efuse-table COMMAND "${python}"
                   "${CMAKE_CURRENT_SOURCE_DIR}/efuse_table_gen.py"
                   ${EFUSE_COMMON_TABLE_CSV_PATH} ${EFUSE_CUSTOM_TABLE_CSV_PATH} ${GEN_EFUSE_TABLE_ARG} "--info")
+add_deprecated_target_alias(show_efuse_table show-efuse-table)
 
 ###################
 # Generates files for unit test. This command is run manually.

@@ -1,0 +1,7 @@
+# Documentation: .gitlab/ci/README.md#manifest-file-to-control-the-buildtest-apps
+
+components/app_trace/test_apps:
+  depends_components:
+    - *common_components
+    - esp_trace
+    - esp_driver_gptimer

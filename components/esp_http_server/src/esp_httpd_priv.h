@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2018-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2018-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -17,21 +17,40 @@
 
 #include <esp_http_server.h>
 #include "osal.h"
+#include "freertos/semphr.h"
+#include "sdkconfig.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Size of request data block/chunk (not to be confused with chunked encoded data)
- * that is received and parsed in one turn of the parsing process. This should not
- * exceed the scratch buffer size and should at least be 8 bytes */
-#define PARSER_BLOCK_SIZE  128
+#if CONFIG_LIBC_NEWLIB_NANO_FORMAT
+#define NEWLIB_NANO_COMPAT_FORMAT            PRIu32
+#define NEWLIB_NANO_COMPAT_CAST(size_t_var)  (uint32_t)size_t_var
+#else
+#define NEWLIB_NANO_COMPAT_FORMAT            "zu"
+#define NEWLIB_NANO_COMPAT_CAST(size_t_var)  size_t_var
+#endif
 
-/* Calculate the maximum size needed for the scratch buffer */
-#define HTTPD_SCRATCH_BUF  MAX(HTTPD_MAX_REQ_HDR_LEN, HTTPD_MAX_URI_LEN)
+/* Size of request data block/chunk (not to be confused with chunked encoded data)
+ * that is received and parsed in one turn of the parsing process. */
+#define PARSER_BLOCK_SIZE  128
 
 /* Formats a log string to prepend context function name */
 #define LOG_FMT(x)      "%s: " x, __func__
+
+/**
+ * @brief Control message data structure for internal use. Sent to control socket.
+ */
+struct httpd_ctrl_data {
+    enum httpd_ctrl_msg {
+        HTTPD_CTRL_SHUTDOWN,
+        HTTPD_CTRL_WORK,
+        HTTPD_CTRL_MAX,
+    } hc_msg;
+    httpd_work_fn_t hc_work;
+    void *hc_work_arg;
+};
 
 /**
  * @brief Thread related data for internal use
@@ -64,11 +83,14 @@ struct sock_db {
     bool lru_socket;                        /*!< Flag indicating LRU socket */
     char pending_data[PARSER_BLOCK_SIZE];   /*!< Buffer for pending data to be received */
     size_t pending_len;                     /*!< Length of pending data to be received */
+    bool for_async_req;                     /*!< If true, the socket will not be LRU purged */
 #ifdef CONFIG_HTTPD_WS_SUPPORT
     bool ws_handshake_done;                 /*!< True if it has done WebSocket handshake (if this socket is a valid WS) */
     bool ws_close;                          /*!< Set to true to close the socket later (when WS Close frame received) */
+    bool ws_close_sent;                     /*!< Set to true once this endpoint has sent its own WS Close frame */
     esp_err_t (*ws_handler)(httpd_req_t *r);   /*!< WebSocket handler, leave to null if it's not WebSocket */
     bool ws_control_frames;                         /*!< WebSocket flag indicating that control frames should be passed to user handlers */
+    esp_err_t (*ws_control_handler)(httpd_req_t *r, httpd_ws_frame_t *frame); /*!< Dedicated WebSocket control-frame handler, NULL if not used */
     void *ws_user_ctx;                         /*!< Pointer to user context data which will be available to handler for websocket*/
 #endif
 };
@@ -79,7 +101,11 @@ struct sock_db {
  */
 struct httpd_req_aux {
     struct sock_db *sd;                             /*!< Pointer to socket database */
-    char            scratch[HTTPD_SCRATCH_BUF + 1]; /*!< Temporary buffer for our operations (1 byte extra for null termination) */
+    char           *scratch;                        /*!< Temporary buffer for our operations (1 byte extra for null termination) */
+    size_t          scratch_size_limit;             /*!< Scratch buffer size limit (By default this value is set to CONFIG_HTTPD_MAX_REQ_HDR_LEN, overwrite is possible) */
+    size_t          scratch_cur_size;               /*!< Scratch buffer cur size (By default this value is set to CONFIG_HTTPD_MAX_URI_LEN, overwrite is possible) */
+    size_t          max_req_hdr_len;             /*!< Header buffer size limit */
+    size_t          max_uri_len;             /*!< URI buffer size limit */
     size_t          remaining_len;                  /*!< Amount of data remaining to be fetched */
     char           *status;                         /*!< HTTP response's status code */
     char           *content_type;                   /*!< HTTP response's content type */
@@ -107,6 +133,7 @@ struct httpd_data {
     httpd_config_t config;                  /*!< HTTPD server configuration */
     int listen_fd;                          /*!< Server listener FD */
     int ctrl_fd;                            /*!< Ctrl message receiver FD */
+    SemaphoreHandle_t ctrl_sock_semaphore;  /*!< Ctrl mbox slot reservation (sized to LWIP_UDP_RECVMBOX_SIZE) */
     int msg_fd;                             /*!< Ctrl message sender FD */
     struct thread_data hd_td;               /*!< Information for the HTTPD thread */
     struct sock_db *hd_sd;                  /*!< The socket database */
@@ -115,10 +142,20 @@ struct httpd_data {
     struct httpd_req hd_req;                /*!< The current HTTPD request */
     struct httpd_req_aux hd_req_aux;        /*!< Additional data about the HTTPD request kept unexposed */
     uint64_t lru_counter;                   /*!< LRU counter */
+    esp_http_server_event_id_t http_server_state;              /*!< HTTPD server state */
 
     /* Array of registered error handler functions */
     httpd_err_handler_func_t *err_handler_fns;
 };
+
+/**
+ * @brief Options for receiving HTTP request data
+ */
+typedef enum {
+    HTTPD_RECV_OPT_NONE               = 0,
+    HTTPD_RECV_OPT_HALT_AFTER_PENDING = 1,   /*!< Halt immediately after receiving from pending buffer */
+    HTTPD_RECV_OPT_BLOCKING           = 2,   /*!< Receive blocking (don't return partial length) */
+} httpd_recv_opt_t;
 
 /******************* Group : Session Management ********************/
 /** @name Session Management
@@ -369,19 +406,6 @@ esp_err_t httpd_req_new(struct httpd_data *hd, struct sock_db *sd);
  */
 esp_err_t httpd_req_delete(struct httpd_data *hd);
 
-/**
- * @brief   For handling HTTP errors by invoking registered
- *          error handler function
- *
- * @param[in] req     Pointer to the HTTP request for which error occurred
- * @param[in] error   Error type
- *
- * @return
- *  - ESP_OK    : error handled successful
- *  - ESP_FAIL  : failure indicates that the underlying socket needs to be closed
- */
-esp_err_t httpd_req_handle_err(httpd_req_t *req, httpd_err_code_t error);
-
 /** End of Group : Parsing
  * @}
  */
@@ -410,22 +434,27 @@ int httpd_send(httpd_req_t *req, const char *buf, size_t buf_len);
  *
  * @note    The exposed API httpd_recv() is simply this function with last parameter
  *          set as false. This function is used internally during reception and
- *          processing of a new request. The option to halt after receiving pending
- *          data prevents the server from requesting more data than is needed for
- *          completing a packet in case when all the remaining part of the packet is
- *          in the pending buffer.
+ *          processing of a new request.
+ *
+ *          There are 2 options available that affect the behavior of the function:
+ *          - HTTPD_RECV_OPT_HALT_AFTER_PENDING
+ *            The option to halt after receiving pending data prevents the server from
+ *            requesting more data than is needed for completing a packet in case when
+ *            all the remaining part of the packet is in the pending buffer.
+ *
+ *          - HTTPD_RECV_OPT_BLOCKING
+ *            The option to not return until the `buf_len` bytes have been read.
  *
  * @param[in]  req    Pointer to new HTTP request which only has the socket descriptor
  * @param[out] buf    Pointer to the buffer which will be filled with the received data
  * @param[in] buf_len Length of the buffer
- * @param[in] halt_after_pending When set true, halts immediately after receiving from
- *                               pending buffer
+ * @param[in] opt     Receive option
  *
  * @return
  *  - Length of data : if successful
  *  - ESP_FAIL       : if failed
  */
-int httpd_recv_with_opt(httpd_req_t *r, char *buf, size_t buf_len, bool halt_after_pending);
+int httpd_recv_with_opt(httpd_req_t *r, char *buf, size_t buf_len, httpd_recv_opt_t opt);
 
 /**
  * @brief   For un-receiving HTTP request data
@@ -493,17 +522,23 @@ int httpd_default_recv(httpd_handle_t hd, int sockfd, char *buf, size_t buf_len,
 
 
 /**
- * @brief   This function is for responding a WebSocket handshake
+ * @brief   Respond to a WebSocket opening handshake.
+ *
+ * On any RFC 6455 §4.2.1 handshake validation failure (missing Host,
+ * malformed Sec-WebSocket-Key, unsupported Sec-WebSocket-Version, etc.),
+ * this function sends the appropriate HTTP error response (400 Bad Request
+ * or 426 Upgrade Required) to the client itself and returns ESP_FAIL.
+ * Callers MUST NOT attempt to send another response on the ESP_FAIL path.
  *
  * @param[in] req                       Pointer to handshake request that will be handled
  * @param[in] supported_subprotocol     Pointer to the subprotocol supported by this URI
  * @return
- *  - ESP_OK                        : When handshake is sucessful
- *  - ESP_ERR_NOT_FOUND             : When some headers (Sec-WebSocket-*) are not found
- *  - ESP_ERR_INVALID_VERSION       : The WebSocket version is not "13"
- *  - ESP_ERR_INVALID_STATE         : Handshake was done beforehand
- *  - ESP_ERR_INVALID_ARG           : Argument is invalid (null or non-WebSocket)
- *  - ESP_FAIL                      : Socket failures
+ *  - ESP_OK                        : Handshake successful; 101 Switching Protocols sent
+ *  - ESP_ERR_INVALID_ARG           : @p req or its aux pointer is NULL
+ *  - ESP_ERR_INVALID_STATE         : Handshake was already performed on this session
+ *  - ESP_FAIL                      : Handshake-validation failure (HTTP error already sent),
+ *                                    memory allocation failure, hash/encode failure,
+ *                                    or socket send failure
  */
 esp_err_t httpd_ws_respond_server_handshake(httpd_req_t *req, const char *supported_subprotocol);
 
@@ -513,12 +548,72 @@ esp_err_t httpd_ws_respond_server_handshake(httpd_req_t *req, const char *suppor
  *
  * @param[in] req    Pointer to handshake request that will be handled
  * @return
- *  - ESP_OK                        : When handshake is sucessful
+ *  - ESP_OK                        : When handshake is successful
  *  - ESP_ERR_INVALID_ARG           : Argument is invalid (null or non-WebSocket)
  *  - ESP_ERR_INVALID_STATE         : Received only some parts of a control frame
  *  - ESP_FAIL                      : Socket failures
  */
 esp_err_t httpd_ws_get_frame_type(httpd_req_t *req);
+
+#ifdef CONFIG_HTTPD_WS_SUPPORT
+/* Control frames carry at most 125 bytes of payload (RFC 6455 §5.5). These values
+ * match the historical auto-reply path: a 128-byte receive buffer, and a 126-byte
+ * cap passed to httpd_ws_recv_frame(). */
+#define HTTPD_WS_CTRL_FRAME_BUF_LEN     128
+#define HTTPD_WS_CTRL_FRAME_MAX_LEN     126
+
+/**
+ * @brief   Receive the body of a WebSocket control frame into a caller buffer.
+ *
+ * @note    The opcode/FIN must already have been decoded by httpd_ws_get_frame_type().
+ *          On success @p frame describes the received (unmasked) control frame with
+ *          @p frame->payload pointing into @p buf.
+ *
+ * @param[in]  req      WebSocket request
+ * @param[out] frame    Frame descriptor to populate
+ * @param[in]  buf      Caller-owned buffer of at least HTTPD_WS_CTRL_FRAME_BUF_LEN bytes
+ * @param[in]  max_len  Maximum payload length to accept
+ * @return
+ *  - ESP_OK                : Frame received
+ *  - ESP_ERR_INVALID_STATE : Frame could not be fully received
+ */
+esp_err_t httpd_ws_recv_control_frame(httpd_req_t *req, httpd_ws_frame_t *frame, uint8_t *buf, size_t max_len);
+
+/**
+ * @brief   Send the protocol reply for a received WebSocket control frame.
+ *
+ * @note    PING is answered with a PONG echoing the payload. CLOSE is answered with
+ *          a CLOSE that echoes the received status code and reason when
+ *          CONFIG_HTTPD_WS_STRICTER_RFC6455 is set, and with an empty CLOSE
+ *          otherwise. All other control frames (for example PONG) require no reply.
+ *
+ * @param[in] req    WebSocket request
+ * @param[in] frame  Control frame previously received (modified in place)
+ * @return
+ *  - ESP_OK  : Reply sent (or none needed)
+ *  - others  : Socket send failure
+ */
+esp_err_t httpd_ws_reply_to_control_frame(httpd_req_t *req, httpd_ws_frame_t *frame);
+
+/**
+ * @brief   Handle an incoming WebSocket control frame via the dedicated control handler.
+ *
+ * @note    Used only when a ws_control_handler is registered (handle_ws_control_frames
+ *          must be true). The server receives the frame body and hands it to the
+ *          control handler, which owns the protocol reply. The server does not reply
+ *          on its own, so a handler that answers a PING cannot produce a duplicate
+ *          PONG on the wire. A handler error is propagated so the caller closes the
+ *          socket.
+ *
+ * @param[in] req    WebSocket request
+ * @return
+ *  - ESP_OK                : Control frame received and handled
+ *  - ESP_ERR_INVALID_ARG   : Argument is invalid (null request aux or session)
+ *  - ESP_ERR_INVALID_STATE : No control handler registered for this session
+ *  - others                : Control handler error, or frame could not be received
+ */
+esp_err_t httpd_ws_handle_control_frame(httpd_req_t *req);
+#endif /* CONFIG_HTTPD_WS_SUPPORT */
 
 /**
  * @brief   Trigger an httpd session close externally
@@ -537,9 +632,43 @@ esp_err_t httpd_ws_get_frame_type(httpd_req_t *req);
  */
 esp_err_t httpd_sess_trigger_close_(httpd_handle_t handle, struct sock_db *session);
 
+/**
+ * @brief   Directly closes the least recently used session
+ *
+ * @param[in] hd  Server instance data
+ *
+ * @return
+ *  - ESP_OK    : if session closed successfully
+ */
+esp_err_t httpd_sess_close_lru_direct(struct httpd_data *hd);
+
 /** End of WebSocket related functions
  * @}
  */
+
+#ifdef CONFIG_HTTPD_ENABLE_EVENTS
+
+#if CONFIG_HTTPD_SERVER_EVENT_POST_TIMEOUT == -1
+#define ESP_HTTP_SERVER_EVENT_POST_TIMEOUT portMAX_DELAY
+#else
+#define ESP_HTTP_SERVER_EVENT_POST_TIMEOUT pdMS_TO_TICKS(CONFIG_HTTPD_SERVER_EVENT_POST_TIMEOUT)
+#endif
+
+/**
+ * @brief Function to dispatch events in default event loop
+ *
+ */
+void esp_http_server_dispatch_event(int32_t event_id, const void* event_data, size_t event_data_size);
+
+#else // CONFIG_HTTPD_ENABLE_EVENTS
+static inline void esp_http_server_dispatch_event(int32_t event_id, const void* event_data, size_t event_data_size)
+{
+    // Events disabled, do nothing
+    (void) event_id;
+    (void) event_data;
+    (void) event_data_size;
+}
+#endif // CONFIG_HTTPD_ENABLE_EVENTS
 
 #ifdef __cplusplus
 }

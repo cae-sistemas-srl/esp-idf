@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2017-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -9,25 +9,15 @@
 #include "esp_efuse_table.h"
 #include "stdlib.h"
 #include "esp_types.h"
-#include "esp32h2/rom/efuse.h"
 #include "assert.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "soc/efuse_periph.h"
-#include "bootloader_random.h"
 #include "sys/param.h"
 
-static __attribute__((unused)) const char *TAG = "efuse";
+ESP_LOG_ATTR_TAG(TAG, "efuse");
 
 // Contains functions that provide access to efuse fields which are often used in IDF.
-
-// Returns chip version from efuse
-uint8_t esp_efuse_get_chip_ver(void)
-{
-    uint32_t chip_ver = 0;
-    esp_efuse_read_field_blob(ESP_EFUSE_WAFER_VERSION, &chip_ver, ESP_EFUSE_WAFER_VERSION[0]->bit_count);
-    return chip_ver;
-}
 
 // Returns chip package from efuse
 uint32_t esp_efuse_get_pkg_ver(void)
@@ -56,8 +46,8 @@ esp_err_t esp_efuse_disable_rom_download_mode(void)
 
 esp_err_t esp_efuse_enable_rom_secure_download_mode(void)
 {
-    if (esp_efuse_read_field_bit(ESP_EFUSE_DIS_DOWNLOAD_MODE)) {
-        return ESP_ERR_INVALID_STATE;
+    if (!esp_efuse_read_field_bit(ESP_EFUSE_DIS_DOWNLOAD_MODE)) {
+        return esp_efuse_write_field_bit(ESP_EFUSE_ENABLE_SECURITY_DOWNLOAD);
     }
-    return esp_efuse_write_field_bit(ESP_EFUSE_ENABLE_SECURITY_DOWNLOAD);
+    return ESP_OK;
 }

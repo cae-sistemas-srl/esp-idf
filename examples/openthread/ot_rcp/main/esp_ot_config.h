@@ -1,16 +1,16 @@
-// Copyright 2021 Espressif Systems (Shanghai) CO LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License
+/*
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: CC0-1.0
+ *
+ * OpenThread Radio Co-Processor (RCP) Example
+ *
+ * This example code is in the Public Domain (or CC0 licensed, at your option.)
+ *
+ * Unless required by applicable law or agreed to in writing, this
+ * software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+ * CONDITIONS OF ANY KIND, either express or implied.
+ */
 
 #pragma once
 
@@ -20,6 +20,15 @@
         .radio_mode = RADIO_MODE_NATIVE,                        \
     }
 
+#if CONFIG_OPENTHREAD_RCP_UART
+#if CONFIG_OPENTHREAD_UART_PIN_MANUAL
+#define OPENTHREAD_RCP_UART_RX_PIN CONFIG_OPENTHREAD_UART_RX_PIN
+#define OPENTHREAD_RCP_UART_TX_PIN CONFIG_OPENTHREAD_UART_TX_PIN
+#else
+#define OPENTHREAD_RCP_UART_RX_PIN UART_PIN_NO_CHANGE
+#define OPENTHREAD_RCP_UART_TX_PIN UART_PIN_NO_CHANGE
+#endif
+
 #define ESP_OPENTHREAD_DEFAULT_HOST_CONFIG()                    \
     {                                                           \
         .host_connection_mode = HOST_CONNECTION_MODE_RCP_UART,  \
@@ -27,22 +36,52 @@
             .port = 0,                                          \
             .uart_config =                                      \
                 {                                               \
-                    .baud_rate =  115200,                       \
+                    .baud_rate =  460800,                       \
                     .data_bits = UART_DATA_8_BITS,              \
                     .parity = UART_PARITY_DISABLE,              \
                     .stop_bits = UART_STOP_BITS_1,              \
                     .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,      \
                     .rx_flow_ctrl_thresh = 0,                   \
-                    .source_clk = UART_SCLK_APB,                \
+                    .source_clk = UART_SCLK_DEFAULT,            \
                 },                                              \
-            .rx_pin = UART_PIN_NO_CHANGE,                       \
-            .tx_pin = UART_PIN_NO_CHANGE,                       \
+            .rx_pin = OPENTHREAD_RCP_UART_RX_PIN,               \
+            .tx_pin = OPENTHREAD_RCP_UART_TX_PIN,               \
         },                                                      \
     }
+#elif CONFIG_OPENTHREAD_RCP_SPI // CONFIG_OPENTHREAD_RCP_SPI
+#define ESP_OPENTHREAD_DEFAULT_HOST_CONFIG()                    \
+    {                                                           \
+        .host_connection_mode = HOST_CONNECTION_MODE_RCP_SPI,   \
+        .spi_slave_config = {                                   \
+            .host_device = SPI2_HOST,                           \
+            .bus_config = {                                     \
+                .mosi_io_num = 3,                               \
+                .miso_io_num = 1,                               \
+                .sclk_io_num = 0,                               \
+                .quadhd_io_num = -1,                            \
+                .quadwp_io_num = -1,                            \
+                .isr_cpu_id = ESP_INTR_CPU_AFFINITY_AUTO,       \
+            },                                                  \
+            .slave_config = {                                   \
+                .mode = 0,                                      \
+                .spics_io_num = 2,                              \
+                .queue_size = 3,                                \
+                .flags = 0,                                     \
+            },                                                  \
+            .intr_pin = 9,                                      \
+        },                                                      \
+    }
+#else // CONFIG_OPENTHREAD_RCP_USB_SERIAL_JTAG
+#define ESP_OPENTHREAD_DEFAULT_HOST_CONFIG()                        \
+    {                                                               \
+        .host_connection_mode = HOST_CONNECTION_MODE_RCP_USB,       \
+        .host_usb_config = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT(), \
+    }
+#endif
 
 #define ESP_OPENTHREAD_DEFAULT_PORT_CONFIG()    \
     {                                           \
-        .storage_partition_name = "ot_storage", \
+        .storage_partition_name = "nvs",        \
         .netif_queue_size = 10,                 \
         .task_queue_size = 10,                  \
     }

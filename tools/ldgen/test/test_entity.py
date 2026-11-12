@@ -1,33 +1,23 @@
 #!/usr/bin/env python
-# coding=utf-8
 #
-# Copyright 2018-2020 Espressif Systems (Shanghai) CO LTD
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-FileCopyrightText: 2018-2022 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 #
 
+import os
 import sys
 import unittest
 
 try:
-    from entity import Entity, EntityDB
+    from ldgen.entity import Entity
+    from ldgen.entity import EntityDB
 except ImportError:
-    sys.path.append('../')
-    from entity import Entity, EntityDB
+    sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+    from ldgen.entity import Entity
+    from ldgen.entity import EntityDB
 
 
 class EntityTest(unittest.TestCase):
-
     def test_create_none(self):
         entity = Entity(Entity.ALL)
         self.assertEqual(Entity.Specificity.NONE, entity.specificity)
@@ -138,7 +128,7 @@ class EntityTest(unittest.TestCase):
         self.assertEqual(entity_a, entity_b)
 
     def test_compare_none_vs_all(self):
-        # Two entities might have the same specifity whether
+        # Two entities might have the same specificity whether
         # Entity.ALL is used or not specified; the latter is
         # considered less than the former.
         entity_a = Entity()
@@ -196,7 +186,6 @@ class EntityTest(unittest.TestCase):
 
 
 class EntityDBTest(unittest.TestCase):
-
     def setUp(self):
         self.entities = EntityDB()
 
@@ -245,6 +234,9 @@ class EntityDBTest(unittest.TestCase):
 
         sections = self.entities.get_sections('ěščřžýáíé.a', 'FreeRTOS-ěščřžýáíé')
         self.assertEqual(set(sections), set(['.literal.ěščřžýáíé']))
+
+        sections = self.entities.get_sections('ěščřžýáíé.a', 'o_suffix')
+        self.assertEqual(set(sections), set(['.find_me']))
 
 
 if __name__ == '__main__':

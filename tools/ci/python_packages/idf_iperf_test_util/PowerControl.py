@@ -1,16 +1,5 @@
-# Copyright 2015-2017 Espressif Systems (Shanghai) PTE LTD
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http:#www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 
 """
 Internal use only.
@@ -18,22 +7,22 @@ Internal use only.
 This file implements controlling  APC PDU via telnet.
 """
 
-import telnetlib
+from pytest_embedded_jtag._telnetlib.telnetlib import Telnet  # python 3.13 removed telnetlib
 
 
-class Control(object):
-    """ control APC via telnet """
+class Control:
+    """control APC via telnet"""
 
     @classmethod
     def apc_telnet_make_choice(cls, telnet, choice):
-        """ select a choice """
+        """select a choice"""
         telnet.read_until(b'Event Log')
         telnet.read_until(b'>')
         telnet.write(choice.encode() + b'\r\n')
 
     @classmethod
     def apc_telnet_common_action(cls, telnet, check_str, action):
-        """ wait until a pattern and then write a line """
+        """wait until a pattern and then write a line"""
         telnet.read_until(check_str.encode())
         telnet.write(action.encode() + b'\r\n')
 
@@ -52,7 +41,7 @@ class Control(object):
 
         # telnet
         # set timeout as 2s so that it won't waste time even can't access APC
-        tn = telnetlib.Telnet(host=apc_ip, timeout=5)
+        tn = Telnet(host=apc_ip, timeout=5)
         # log on
         cls.apc_telnet_common_action(tn, 'User Name :', 'apc')
         cls.apc_telnet_common_action(tn, 'Password  :', 'apc')

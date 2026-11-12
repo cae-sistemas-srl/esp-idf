@@ -25,7 +25,7 @@
     Open On-Chip Debugger v0.10.0-esp32-20201202-26-g05a036c2 (2021-03-15-17:18)
     Licensed under GNU GPL v2
     For bug reports, read
-        http://openocd.org/doc/doxygen/bugs.html
+        https://openocd.org/doc/doxygen/bugs.html
     Info : only one transport option; autoselect 'jtag'
     Warn : Transport "jtag" was already selected
     force hard breakpoints
@@ -97,7 +97,7 @@
       - ESP32-C3 target configuration file. Can be used together with one of the ``interface/`` configuration files.
     * - ``interface/esp_usb_jtag.cfg``
       - JTAG adapter configuration file for ESP32-C3.
-    * - ``interface/ftdi/esp32_devkitj_v1.cfg``
+    * - ``interface/ftdi/esp_ftdi.cfg``
       - JTAG adapter configuration file for ESP-Prog boards.
 
 ---
@@ -124,6 +124,9 @@
       - TCK
     * - MTMS / GPIO4
       - TMS
+
+.. |jtag-sel-gpio| replace:: GPIO10
+.. |jtag-gpio-list| replace:: GPIO4-GPIO7
 
 ---
 

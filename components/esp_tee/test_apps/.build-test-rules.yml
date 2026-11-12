@@ -1,0 +1,17 @@
+# Documentation: .gitlab/ci/README.md#manifest-file-to-control-the-buildtest-apps
+
+components/esp_tee/test_apps/tee_cli_app:
+  enable:
+    - if: CONFIG_NAME in ["default", "minimal_tee"] and IDF_TARGET in ["esp32c6", "esp32h2", "esp32c5", "esp32c61"]
+      reason: supported only the above targets
+    - if: CONFIG_NAME == "pl2" and IDF_TARGET in ["esp32c6", "esp32h2", "esp32c61"]
+      reason: protection-level 2 security configuration (no flash encryption)
+    - if: CONFIG_NAME == "pl3" and IDF_TARGET == "esp32c5"
+      reason: protection-level 3 security configuration (flash encryption in release mode)
+  depends_components:
+    - esp_tee
+
+components/esp_tee/test_apps/tee_test_fw:
+  enable:
+    - if: IDF_TARGET in ["esp32c6", "esp32h2", "esp32c5", "esp32c61"]
+      reason: supported only the above targets

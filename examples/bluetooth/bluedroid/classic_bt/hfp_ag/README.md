@@ -1,28 +1,148 @@
-| Supported Targets | ESP32 |
-| ----------------- | ----- |
+| Supported Targets | ESP32 | ESP32-S31 |
+| ----------------- | ----- | --------- |
 
-# Hands-Free Audio Gateway
+# Hands-Free Audio Gateway (HF-AG)
 
-This example is to show how to use the APIs of Hands-Free (HF) Audio Gateway (AG) Component and the effects of them by providing a set of commands. You can use this example to communicate with a Hands-Free Unit (e.g. a headphone set). This example uses UART for user commands.
+This example is to show how to use the APIs of Hands-Free Audio Gateway (hf_ag) Component and the effects of them by providing a set of commands. You can use this example to communicate with a device that implements Hands-Free Client Role (e.g. a headphone set).
 
 ## How to use example
 
 ### Hardware Required
 
-This example is designed to run on commonly available ESP32 development board, e.g. ESP32-DevKitC. To operate this example, it should be connected to a Hands-Free Unit running on a Headphone/Headset or on another ESP32 development board loaded with Hands Free Unit (hfp_hf) example from ESP-IDF.
+This example is designed to run on commonly available ESP32 and ESP32-S31 development boards, e.g. ESP32-DevKitC and so on. To operate this example, it should be connected to a Hands-Free Client running on a Headphone/Headset or on another ESP32 or ESP32-S31 development board loaded with [hfp_hf](../hfp_hf) example of ESP-IDF.
 
 ### Configure the project
 
-```
+Open the project configuration menu:
+
+```bash
 idf.py menuconfig
 ```
 
-ESP32 supports two types of audio data paths: PCM and HCI. Because the default sdkconfig of this example does not configured the data path in a specific way. You should config the data path you want:
+### Special Configurations for HFP
 
-- PCM : When using PCM, audio data stream is directed to GPIO pins and you should link these GPIO pins to a speaker via I2S port. You should choose PCM in `menuconfig` path: `Component config --> Bluetooth controller --> BR/EDR Sync(SCO/eSCO) default data path --> PCM`and also `Component config --> Bluetooth --> Bluedroid Options -->Hands Free/Handset Profile --> audio(SCO) data path --> PCM`.
-- HCI : When using HCI, audio data stream will be transported to HF unit app via HCI. You should choose HCI in `menuconfig` path: `Component config -->Bluetooth controller -->BR/EDR Sync(SCO/eSCO) default data path --> HCI` and also `Component config --> Bluetooth --> Bluedroid Options -->Hands Free/Handset Profile --> audio(SCO) data path --> HCI`.
+#### Data Path
 
-**Note: Wide Band Speech is disabled by default, if you want to use it please select it in the menuconfig path: `Component config --> Bluetooth --> Bluedroid Options --> Wide Band Speech`.**
+ESP32 HFP supports two types of audio datapath: PCM and HCI. Currently, ESP32-S31 HFP only supports HCI.
+
+The default configuration is `PCM`, if you want to use `vHCI` you should configure the data path before building and downloading the binary.
+
+- PCM: To use PCM, audio stream is directed from Bluetooth controller to the specific GPIO pins you set in the demo, and you should link these GPIO pins to a speaker via I2S port. The audio data will not go through the `Bluedroid`. In menuconfig, you should choose PCM in `menuconfig` path:
+
+    `Component config --> Bluetooth controller --> BR/EDR Sync(SCO/eSCO) default data path --> PCM`
+
+    and also
+
+    `Component config --> Bluetooth --> Bluedroid Options --> Hands Free/Handset Profile --> audio(SCO) data path --> PCM`.
+
+- vHCI: To use vHCI, audio data stream will be directed from Bluetooth Controller through vHCI and go through the Bluedroid to the Application layer. In menuconfig, you should choose vHCI in `menuconfig` path:
+
+    `Component config --> Bluetooth controller --> BR/EDR Sync(SCO/eSCO) default data path --> HCI`
+
+    and also
+
+    `Component config --> Bluetooth --> Bluedroid Options --> Hands Free/Handset Profile --> audio(SCO) data path --> HCI`.
+
+#### PCM Signal Configurations
+
+PCM Signal supports three configurations in menuconfig: PCM Role, PCM Polar and Channel Mode(Stereo/Mono).
+
+- PCM Role: PCM role can be configured as PCM master or PCM slave. The default configuration is `Master`, you can change the PCM role in `menuconfig` path:
+    `Component config --> Bluetooth --> Controller Options --> PCM Signal Configurations --> PCM Signal Configurations: Role, Polar and Channel Mode(Stereo/Mono) --> PCM Role`
+
+- PCM Polar: PCM polarity can be configured as Falling Edge or Rising Edge. The default configuration is `Falling Edge`, you can change the PCM polar in `menuconfig` path:
+    `Component config --> Bluetooth --> Controller Options --> PCM Signal Configurations --> PCM Signal Configurations: Role, Polar and Channel Mode(Stereo/Mono) --> PCM Polar`
+
+- Channel Mode(Stereo/Mono): PCM frame synchronization signal can be configured as Stereo mode or Mono mode, where the Mono mode can be configured in two different forms(Mono mode 1 and Mono mode 2). As is shown in the figure ![Stereo/Mono](image/Channel_Mode_Stereo_Mono.png)
+
+  - Stereo Mode(Dual channel): FSYNC and DOUT signals both change simultaneously on the edge of CLK. The FSYNC signal continues until the end of the current channel-data transmission.
+  - Mono Mode 1(Single channel): FSYNC signal starts to change a CLK clock cycle earlier than the DOUT signal, which means that the FSYNC signal takes effect a clock cycle earlier than the first bit of the current channel-data transmission. The FSYNC signal continues for one extra CLK clock cycle.
+  - Mono Mode 2(Single channel): FSYNC and DOUT signals both change simultaneously on the edge of CLK. The FSYNC signal continues for one extra CLK clock cycle.
+
+- The default configuration is `Stereo Mode`, you can change the PCM Channel mode in `menuconfig` path:
+    `Component config --> Bluetooth --> Controller Options --> PCM Signal Configurations --> PCM Signal Configurations: Role, Polar and Channel Mode(Stereo/Mono) --> Channel Mode(Stereo/Mono)`
+
+### Codec Choice
+
+Supported targets provide the following codecs for HFP audio data: `CVSD`, `mSBC` (WBS), and optionally `LC3-SWB` (HFP 1.9).
+
+`CVSD` is the default setting and is also the widely used codec for voice audio. `mSBC` is designed for better voice quality through HFP Wideband Speech. `LC3-SWB` further extends sample rate to 32 kHz and must be encoded/decoded in the application layer.
+
+To select Wideband / Super Wideband negotiation options, use:
+
+`Component config --> Bluetooth --> Bluedroid Options --> Hands Free/Handset Profile --> Wideband Speech`
+
+and (for LC3-SWB):
+
+`Component config --> Bluetooth --> Bluedroid Options --> Hands Free/Handset Profile --> Super Wideband Speech (LC3-SWB)`
+
+Which codec is actually used also depends on the `Data Path` configuration and peer capability:
+
+- If you choose `PCM` for datapath, you can only use `CVSD` and hardware is responsible for the codec job. You cannot use `mSBC`/`LC3` on the PCM path, because those codecs are handled in software (stack or application) over HCI.
+- If you choose `vHCI` for datapath with `Wideband Speech` on and LC3 off, codec job for mSBC is done in Bluedroid (unless External Codec is enabled, see below).
+- If you choose `vHCI` for datapath with `Wideband Speech` off, hardware is responsible for the codec job and `CVSD` is in use.
+- If you enable `Super Wideband Speech (LC3-SWB)`, LC3 negotiation is enabled. Bluedroid has **no internal LC3 codec**; this example implements LC3 encode/decode in the application using [espressif/esp_audio_codec](https://components.espressif.com/components/espressif/esp_audio_codec/).
+
+#### External Codec (mSBC and LC3-SWB)
+
+`Use External Codec for HFP` (`BT_HFP_USE_EXTERNAL_CODEC`) means the application owns encode/decode and uses encoded-frame APIs (`esp_hf_ag_register_audio_data_callback` / `esp_hf_ag_audio_data_send`). When enabled, Bluedroid's built-in mSBC software codec is removed.
+
+This example reuses **one** push TX / decode worker path for both codecs; only the `esp_audio_codec` open/process/close calls differ:
+
+| Negotiated codec | Application encoder/decoder | Frame period / PCM size |
+| ---------------- | --------------------------- | ----------------------- |
+| mSBC | `esp_sbc_enc_*` / `esp_sbc_dec_*` (`ESP_SBC_MODE_MSBC`) | 7.5 ms / 240 bytes PCM |
+| LC3-SWB | `esp_lc3_enc_*` / `esp_lc3_dec_*` | 7.5 ms / 480 bytes PCM |
+
+H2 sync headers are **not** filled by the application: send the codec payload only (mSBC 57 bytes / LC3 58 bytes). The stack adds H2 on TX and strips it on RX.
+
+| Mode | Typical menuconfig | Who encodes/decodes |
+| ---- | ------------------ | ------------------- |
+| Internal mSBC (legacy) | HCI + WBS, External Codec **off** | Bluedroid + PCM callbacks / ringbuffer in this example |
+| External mSBC | HCI + WBS, External Codec **on**, LC3 optional | Application via `esp_audio_codec` SBC (mSBC mode) |
+| External LC3-SWB | HCI + WBS + LC3 **on** + External Codec **on** | Application via `esp_audio_codec` LC3 |
+
+Recommended settings with peer [hfp_hf](../hfp_hf):
+
+1. Controller and Bluedroid SCO data path: **HCI**
+2. Enable `Wideband Speech`
+3. Enable `Use External Codec for HFP` (required for both external mSBC and LC3-SWB)
+4. Optionally enable `Super Wideband Speech (LC3-SWB)` if you want LC3 negotiation
+5. Keep AG/HF options consistent on both boards
+6. Build so Component Manager can fetch `esp_audio_codec` (see below)
+7. `con` then `cona`. Expect `connected_msbc` or `connected_lc3`, and a log such as `ext codec ready: type=mSBC` / `type=LC3-SWB`
+
+`CVSD` + External Codec is not the main path of this AG sine demo (prefer mSBC/LC3).
+
+#### Dependency: `esp_audio_codec`
+
+External mSBC/LC3 encode/decode link against [`espressif/esp_audio_codec`](https://components.espressif.com/components/espressif/esp_audio_codec/). The dependency is already declared in `main/idf_component.yml`:
+
+```yaml
+dependencies:
+  espressif/esp_audio_codec: "^2.6.1"
+```
+
+On the first configure/build, ESP-IDF Component Manager downloads it into `managed_components/`. You normally do **not** need a manual step.
+
+If the dependency is missing, add it with:
+
+```bash
+idf.py add-dependency "espressif/esp_audio_codec^2.6.1"
+```
+
+Enable the codecs you need under:
+
+`Component config --> ESP Audio Codec --> Audio Encoder / Audio Decoder`
+
+- mSBC external path: enable **SBC** encoder/decoder  
+- LC3-SWB: also enable **LC3** encoder/decoder  
+
+Then rebuild:
+
+```bash
+idf.py reconfigure build
+```
 
 ### Build and Flash
 
@@ -40,7 +160,7 @@ See the [Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/l
 
 ## Example Output
 
-When you flash and monitor this example, the commands help table prints the following log at the very begining:
+When you flash and monitor this example, the commands help table prints the following log at the very beginning:
 
 ```
 Type 'help' to get the list of commands.
@@ -102,13 +222,15 @@ You can type `cona` to establish the audio connection between HF Unit and AG dev
 
 #### Choice of Codec
 
-ESP32 supports both CVSD and mSBC codec. HF Unit and AG device determine which codec to use by exchanging features during service level connection. The choice of codec also depends on the your configuration in `menuconfig`.
+Supported targets can negotiate CVSD, mSBC, and (when enabled) LC3-SWB. HF Unit and AG determine the codec by exchanging features during service level connection. The result also depends on your `menuconfig`.
 
-Since CVSD is the default codec in HFP, we just show the scenarios using mSBC:
+CVSD is the default. For higher quality:
 
-- If you enable `BT_HFP_WBS_ENABLE` in `menuconfig`, mSBC will be available.
-- If both HF Unit and AG support mSBC and `BT_HFP_WBS_ENABLE` is enabled, ESP32 chooses mSBC.
-- If you use PCM data path, mSBC is not available.
+- If you enable `BT_HFP_WBS_ENABLE`, mSBC can be negotiated.
+- With `BT_HFP_USE_EXTERNAL_CODEC`, this example encodes/decodes mSBC in the application (`esp_sbc_*`). Without it, Bluedroid's internal mSBC path is used (PCM callbacks).
+- If you also enable `BT_HFP_LC3_ENABLE` **and** External Codec, negotiation may select LC3-SWB and this example runs the shared external path with `esp_lc3_*`.
+- LC3-SWB always requires External Codec (`esp_hf_ag_audio_data_send` is only active in that mode).
+- If you use the PCM data path, mSBC and LC3 are not available over the Bluedroid HCI audio APIs used in this demo.
 
 ### Answer or Reject an Incoming Call
 
@@ -199,15 +321,11 @@ I (245311) BT_APP_HF: --Audio State connected
 
 #### Device Status Indication
 
-You can type `ind <call> <ntk> <callsetup> <sig>` to send device status of AG to HF Unit. Log on AG prints such as:  `Device Indicator Changed!`  and on HF Unit side prints such as:
+You can type `ciev <ind_type> <value>` to send device status of AG to HF Unit. Log on AG prints such as:  `Device Indicator Changed!`  and on HF Unit side prints such as:
 
 ```
-E (293641) BT_HF: APP HFP event: CALL_IND_EVT
-E (293641) BT_HF: --Call indicator call in progress
-E (293641) BT_HF: APP HFP event: CALL_SETUP_IND_EVT
-E (293651) BT_HF: --Call setup indicator INCOMING
-E (293651) BT_HF: APP HFP event: SIGNAL_STRENGTH_IND_EVT
-E (293661) BT_HF: -- signal strength: 5
+I (106167) BT_HF: APP HFP event: CALL_SETUP_IND_EVT
+I (106167) BT_HF: --Call setup indicator INCOMING
 ```
 
 **Note: The AG device sends only the changed status to the HF Unit.**
@@ -239,10 +357,12 @@ E (19556) BT_HF: --in-band ring state Provided
 
 If you encounter any problems, please check if the following rules are followed:
 
-- You should type the command in the terminal according to the format described in the commands help table. 
+- You should type the command in the terminal according to the format described in the commands help table.
 - Not all commands in the table are supported by the HF Unit.
 - If you want to `hf con;` to establish a service level connection with a specific HF Unit, you should add the MAC address of the HF Unit in `app_hf_msg_set.c` for example: `esp_bd_addr_t peer_addr = {0xb4, 0xe6, 0x2d, 0xeb, 0x09, 0x93};`
 - Use `esp_hf_client_register_callback()` and  `esp_hf_client_init();` before  establishing a service level connection.
+- For external mSBC/LC3: enable HCI + WBS + `BT_HFP_USE_EXTERNAL_CODEC` on **both** AG and HF; for LC3 also enable `BT_HFP_LC3_ENABLE`. Confirm `managed_components/espressif__esp_audio_codec` exists after build. Missing `esp_sbc_enc.h` / `esp_lc3_enc.h` usually means the Component Manager dependency was not fetched—run `idf.py reconfigure` or `idf.py add-dependency "espressif/esp_audio_codec^2.6.1"`.
+- Enabling `BT_HFP_USE_EXTERNAL_CODEC` without using the example's external encoded-frame path (or with an outdated AG tree) can cause `rb send fail` / `BTA_AG_SCO_OPEN_ST: Ignoring event 9`, because the stack no longer pulls PCM for internal mSBC encode.
 
 ## Example Breakdown
 
@@ -251,6 +371,5 @@ Due to the complexity of the HFP, this example has more source files than other 
 - The example will respond to user command through the UART console. Please go to `console_uart.c` for the configuration details.
 - For the voice interface, ESP32 has provided PCM input/output signals which can be directed to GPIO pins. So, please go to `gpio_pcm_config.c` for the configuration details.
 - If you want to update the command table, please refer to `app_hf_msg_set.c`.
-- If you want to update the command parse rules, please refer to `app_hf_msg_prs.c`.
 - If you want to update the responses of the AG or want to update the log, please refer to `bt_app_hf.c`.
 - The task configuration part is in `bt_app_core.c`.

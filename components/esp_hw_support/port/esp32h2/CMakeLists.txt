@@ -1,24 +1,18 @@
-set(srcs "cpu_util_esp32h2.c"
-         "rtc_clk_init.c"
+idf_build_get_property(non_os_build NON_OS_BUILD)
+
+set(srcs "rtc_clk_init.c"
          "rtc_clk.c"
-         "rtc_init.c"
-         "rtc_pm.c"
-         "rtc_sleep.c"
+         "pmu_param.c"
+         "pmu_init.c"
          "rtc_time.c"
          "chip_info.c"
          )
 
-if(NOT BOOTLOADER_BUILD)
-    list(APPEND srcs "../async_memcpy_impl_gdma.c"
-                     "memprot.c"
-                     "esp_hmac.c"
-                     "esp_crypto_lock.c"
-                     "esp_ds.c"
-                     "dport_access.c")
+if(NOT non_os_build)
+    list(APPEND srcs "sar_periph_ctrl.c")
 endif()
 
 add_prefix(srcs "${CMAKE_CURRENT_LIST_DIR}/" "${srcs}")
 
 target_sources(${COMPONENT_LIB} PRIVATE "${srcs}")
-target_include_directories(${COMPONENT_LIB} PUBLIC . private_include)
-target_include_directories(${COMPONENT_LIB} PRIVATE ../hal)
+target_include_directories(${COMPONENT_LIB} PUBLIC . include private_include)

@@ -1,16 +1,8 @@
-// Copyright 2015-2016 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 /*******************************************************************************
  *
@@ -28,7 +20,9 @@
 
 typedef enum {
     BTC_PRF_QUE_CONNECT = 0,
-    BTC_PRF_QUE_ADVANCE
+    BTC_PRF_QUE_ADVANCE,
+    BTC_PRF_QUE_REMOVE_UUID,
+    BTC_PRF_QUE_ADVANCE_BUSY_CONNECT
 } btc_prf_que_act_t;
 
 typedef bt_status_t (*btc_connect_cb_t) (bt_bdaddr_t *bda, uint16_t uuid);
@@ -44,10 +38,14 @@ typedef struct connect_node_t {
 typedef union {
     // BTC_PRF_QUE_CONNECT
     connect_node_t connect_node;
+    // BTC_PRF_QUE_REMOVE_UUID
+    uint16_t uuid;
 } btc_prf_que_args_t;
 
 bt_status_t btc_queue_connect(uint16_t uuid, const bt_bdaddr_t *bda, btc_connect_cb_t connect_cb);
 void btc_queue_advance(void);
+void btc_queue_remove_uuid(uint16_t uuid);
+void btc_queue_advance_busy_connect(uint16_t uuid, const bt_bdaddr_t *bda);
 bt_status_t btc_queue_connect_next(void);
 void btc_queue_release(void);
 

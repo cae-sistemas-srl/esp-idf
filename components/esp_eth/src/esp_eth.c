@@ -1,27 +1,28 @@
-// Copyright 2019-2021 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2019-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <sys/cdefs.h>
 #include <stdatomic.h>
+#include <string.h>
+#include <stdarg.h>
 #include "esp_log.h"
 #include "esp_check.h"
-#include "esp_eth.h"
+#include "esp_eth_driver.h"
 #include "esp_event.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#if CONFIG_ETH_TRANSMIT_MUTEX
+/**
+ * @brief Transmit timeout when multiple accesses to network driver
+ */
+#define ESP_ETH_TX_TIMEOUT_MS   250
+#endif
 
 static const char *TAG = "esp_eth";
 
@@ -48,13 +49,18 @@ typedef struct {
     esp_eth_mac_t *mac;
     esp_timer_handle_t check_link_timer;
     uint32_t check_link_period_ms;
+    bool auto_nego_en;
     eth_speed_t speed;
     eth_duplex_t duplex;
-    eth_link_t link;
+    _Atomic eth_link_t link;
     atomic_int ref_count;
     void *priv;
     _Atomic esp_eth_fsm_t fsm;
+#if CONFIG_ETH_TRANSMIT_MUTEX
+    SemaphoreHandle_t transmit_mutex;
+#endif // CONFIG_ETH_TRANSMIT_MUTEX
     esp_err_t (*stack_input)(esp_eth_handle_t eth_handle, uint8_t *buffer, uint32_t length, void *priv);
+    esp_err_t (*stack_input_info)(esp_eth_handle_t eth_handle, uint8_t *buffer, uint32_t length, void *priv, void *info);
     esp_err_t (*on_lowlevel_init_done)(esp_eth_handle_t eth_handle);
     esp_err_t (*on_lowlevel_deinit_done)(esp_eth_handle_t eth_handle);
     esp_err_t (*customized_read_phy_reg)(esp_eth_handle_t eth_handle, uint32_t phy_addr, uint32_t phy_reg, uint32_t *reg_value);
@@ -99,9 +105,28 @@ static esp_err_t eth_stack_input(esp_eth_mediator_t *eth, uint8_t *buffer, uint3
     esp_eth_driver_t *eth_driver = __containerof(eth, esp_eth_driver_t, mediator);
     if (eth_driver->stack_input) {
         return eth_driver->stack_input((esp_eth_handle_t)eth_driver, buffer, length, eth_driver->priv);
+    // try to pass traffic using extended `stack_input_info`. It's for compatibility reasons since older MAC drivers may
+    // still use `stack_input` but higher level API registered extended version.
+    } else if (eth_driver->stack_input_info) {
+        return eth_driver->stack_input_info((esp_eth_handle_t)eth_driver, buffer, length, eth_driver->priv, NULL);
     }
     // No stack input path has been installed, just drop the incoming packets
-    free(buffer);
+    free(buffer); // IDF-11444
+    return ESP_OK;
+}
+
+static esp_err_t eth_stack_input_info(esp_eth_mediator_t *eth, uint8_t *buffer, uint32_t length, void *info)
+{
+    esp_eth_driver_t *eth_driver = __containerof(eth, esp_eth_driver_t, mediator);
+    if (eth_driver->stack_input_info) {
+        return eth_driver->stack_input_info((esp_eth_handle_t)eth_driver, buffer, length, eth_driver->priv, info);
+    // try using simple `stack_input`. It's for compatibility reasons since higher level API may still register original `stack_input`.
+    // Additional frame info is silently lost of course.
+    } else if (eth_driver->stack_input) {
+        return eth_driver->stack_input((esp_eth_handle_t)eth_driver, buffer, length, eth_driver->priv);
+    }
+    // No stack input path has been installed, just drop the incoming packets
+    free(buffer); // IDF-11444
     return ESP_OK;
 }
 
@@ -126,7 +151,7 @@ static esp_err_t eth_on_state_changed(esp_eth_mediator_t *eth, esp_eth_state_t s
     case ETH_STATE_LINK: {
         eth_link_t link = (eth_link_t)args;
         ESP_GOTO_ON_ERROR(mac->set_link(mac, link), err, TAG, "ethernet mac set link failed");
-        eth_driver->link = link;
+        atomic_store(&eth_driver->link, link);
         if (link == ETH_LINK_UP) {
             ESP_GOTO_ON_ERROR(esp_event_post(ETH_EVENT, ETHERNET_EVENT_CONNECTED, &eth_driver, sizeof(esp_eth_driver_t *), 0), err,
                               TAG, "send ETHERNET_EVENT_CONNECTED event failed");
@@ -194,14 +219,19 @@ esp_err_t esp_eth_driver_install(const esp_eth_config_t *config, esp_eth_handle_
         .skip_unhandled_events = true
     };
     ESP_GOTO_ON_ERROR(esp_timer_create(&check_link_timer_args, &eth_driver->check_link_timer), err, TAG, "create link timer failed");
+#if CONFIG_ETH_TRANSMIT_MUTEX
+    eth_driver->transmit_mutex = xSemaphoreCreateMutex();
+    ESP_GOTO_ON_FALSE(eth_driver->transmit_mutex, ESP_ERR_NO_MEM, err, TAG, "Failed to create transmit mutex");
+#endif // CONFIG_ETH_TRANSMIT_MUTEX
     atomic_init(&eth_driver->ref_count, 1);
     atomic_init(&eth_driver->fsm, ESP_ETH_FSM_STOP);
     eth_driver->mac = mac;
     eth_driver->phy = phy;
-    eth_driver->link = ETH_LINK_DOWN;
+    atomic_init(&eth_driver->link, ETH_LINK_DOWN);
     eth_driver->duplex = ETH_DUPLEX_HALF;
     eth_driver->speed = ETH_SPEED_10M;
     eth_driver->stack_input = config->stack_input;
+    eth_driver->stack_input_info = config->stack_input_info;
     eth_driver->on_lowlevel_init_done = config->on_lowlevel_init_done;
     eth_driver->on_lowlevel_deinit_done = config->on_lowlevel_deinit_done;
     eth_driver->check_link_period_ms = config->check_link_period_ms;
@@ -210,6 +240,7 @@ esp_err_t esp_eth_driver_install(const esp_eth_config_t *config, esp_eth_handle_
     eth_driver->mediator.phy_reg_read = eth_phy_reg_read;
     eth_driver->mediator.phy_reg_write = eth_phy_reg_write;
     eth_driver->mediator.stack_input = eth_stack_input;
+    eth_driver->mediator.stack_input_info = eth_stack_input_info;
     eth_driver->mediator.on_state_changed = eth_on_state_changed;
     // set mediator for both mac and phy object, so that mac and phy are connected to each other via mediator
     mac->set_mediator(mac, &eth_driver->mediator);
@@ -220,14 +251,11 @@ esp_err_t esp_eth_driver_install(const esp_eth_config_t *config, esp_eth_handle_
     // init MAC first, so that MAC can generate the correct SMI signals
     ESP_GOTO_ON_ERROR(mac->init(mac), err, TAG, "init mac failed");
     ESP_GOTO_ON_ERROR(phy->init(phy), err, TAG, "init phy failed");
+    // get default status of PHY autonegotiation (ultimately may also indicate if it is supported)
+    ESP_GOTO_ON_ERROR(phy->autonego_ctrl(phy, ESP_ETH_PHY_AUTONEGO_G_STAT, &eth_driver->auto_nego_en),
+                        err, TAG, "get autonegotiation status failed");
     ESP_LOGD(TAG, "new ethernet driver @%p", eth_driver);
     *out_hdl = eth_driver;
-
-    // for backward compatible to 4.0, and will get removed in 5.0
-#if CONFIG_ESP_NETIF_TCPIP_ADAPTER_COMPATIBLE_LAYER
-    extern esp_err_t tcpip_adapter_compat_start_eth(void *eth_driver);
-    tcpip_adapter_compat_start_eth(eth_driver);
-#endif
 
     return ESP_OK;
 err:
@@ -235,6 +263,11 @@ err:
         if (eth_driver->check_link_timer) {
             esp_timer_delete(eth_driver->check_link_timer);
         }
+#if CONFIG_ETH_TRANSMIT_MUTEX
+        if (eth_driver->transmit_mutex) {
+            vSemaphoreDelete(eth_driver->transmit_mutex);
+        }
+#endif // CONFIG_ETH_TRANSMIT_MUTEX
         free(eth_driver);
     }
     return ret;
@@ -256,6 +289,9 @@ esp_err_t esp_eth_driver_uninstall(esp_eth_handle_t hdl)
     esp_eth_mac_t *mac = eth_driver->mac;
     esp_eth_phy_t *phy = eth_driver->phy;
     ESP_GOTO_ON_ERROR(esp_timer_delete(eth_driver->check_link_timer), err, TAG, "delete link timer failed");
+#if CONFIG_ETH_TRANSMIT_MUTEX
+    vSemaphoreDelete(eth_driver->transmit_mutex);
+#endif // CONFIG_ETH_TRANSMIT_MUTEX
     ESP_GOTO_ON_ERROR(phy->deinit(phy), err, TAG, "deinit phy failed");
     ESP_GOTO_ON_ERROR(mac->deinit(mac), err, TAG, "deinit mac failed");
     free(eth_driver);
@@ -269,13 +305,14 @@ esp_err_t esp_eth_start(esp_eth_handle_t hdl)
     esp_eth_driver_t *eth_driver = (esp_eth_driver_t *)hdl;
     ESP_GOTO_ON_FALSE(eth_driver, ESP_ERR_INVALID_ARG, err, TAG, "ethernet driver handle can't be null");
     esp_eth_phy_t *phy = eth_driver->phy;
-    esp_eth_mac_t *mac = eth_driver->mac;
     // check if driver has stopped
     esp_eth_fsm_t expected_fsm = ESP_ETH_FSM_STOP;
     ESP_GOTO_ON_FALSE(atomic_compare_exchange_strong(&eth_driver->fsm, &expected_fsm, ESP_ETH_FSM_START),
                       ESP_ERR_INVALID_STATE, err, TAG, "driver started already");
-    ESP_GOTO_ON_ERROR(phy->negotiate(phy), err, TAG, "phy negotiation failed");
-    ESP_GOTO_ON_ERROR(mac->start(mac), err, TAG, "start mac failed");
+    // Autonegotiate link speed and duplex mode when enabled
+    if (eth_driver->auto_nego_en == true) {
+        ESP_GOTO_ON_ERROR(phy->autonego_ctrl(phy, ESP_ETH_PHY_AUTONEGO_RESTART, &eth_driver->auto_nego_en), err, TAG, "phy negotiation failed");
+    }
     ESP_GOTO_ON_ERROR(esp_event_post(ETH_EVENT, ETHERNET_EVENT_START, &eth_driver, sizeof(esp_eth_driver_t *), 0),
                       err, TAG, "send ETHERNET_EVENT_START event failed");
     ESP_GOTO_ON_ERROR(phy->get_link(phy), err, TAG, "phy get link status failed");
@@ -290,13 +327,19 @@ esp_err_t esp_eth_stop(esp_eth_handle_t hdl)
     esp_err_t ret = ESP_OK;
     esp_eth_driver_t *eth_driver = (esp_eth_driver_t *)hdl;
     ESP_GOTO_ON_FALSE(eth_driver, ESP_ERR_INVALID_ARG, err, TAG, "ethernet driver handle can't be null");
-    esp_eth_mac_t *mac = eth_driver->mac;
+    esp_eth_phy_t *phy = eth_driver->phy;
     // check if driver has started
     esp_eth_fsm_t expected_fsm = ESP_ETH_FSM_START;
     ESP_GOTO_ON_FALSE(atomic_compare_exchange_strong(&eth_driver->fsm, &expected_fsm, ESP_ETH_FSM_STOP),
                       ESP_ERR_INVALID_STATE, err, TAG, "driver not started yet");
-    ESP_GOTO_ON_ERROR(esp_timer_stop(eth_driver->check_link_timer), err, TAG, "stop link timer failed");
-    ESP_GOTO_ON_ERROR(mac->stop(mac), err, TAG, "stop mac failed");
+    ESP_GOTO_ON_ERROR(esp_timer_stop_blocking(eth_driver->check_link_timer, portMAX_DELAY), err, TAG, "stop link timer failed");
+
+    eth_link_t expected_link = ETH_LINK_UP;
+    if (atomic_compare_exchange_strong(&eth_driver->link, &expected_link, ETH_LINK_DOWN)){
+        // MAC is stopped by setting link down at PHY layer
+        ESP_GOTO_ON_ERROR(phy->set_link(phy, ETH_LINK_DOWN), err, TAG, "ethernet phy reset link failed");
+    }
+
     ESP_GOTO_ON_ERROR(esp_event_post(ETH_EVENT, ETHERNET_EVENT_STOP, &eth_driver, sizeof(esp_eth_driver_t *), 0),
                       err, TAG, "send ETHERNET_EVENT_STOP event failed");
 err:
@@ -312,7 +355,23 @@ esp_err_t esp_eth_update_input_path(
     esp_eth_driver_t *eth_driver = (esp_eth_driver_t *)hdl;
     ESP_GOTO_ON_FALSE(eth_driver, ESP_ERR_INVALID_ARG, err, TAG, "ethernet driver handle can't be null");
     eth_driver->priv = priv;
+    eth_driver->stack_input_info = NULL;
     eth_driver->stack_input = stack_input;
+err:
+    return ret;
+}
+
+esp_err_t esp_eth_update_input_path_info(
+    esp_eth_handle_t hdl,
+    esp_err_t (*stack_input_info)(esp_eth_handle_t hdl, uint8_t *buffer, uint32_t length, void *priv, void *info),
+    void *priv)
+{
+    esp_err_t ret = ESP_OK;
+    esp_eth_driver_t *eth_driver = (esp_eth_driver_t *)hdl;
+    ESP_GOTO_ON_FALSE(eth_driver, ESP_ERR_INVALID_ARG, err, TAG, "ethernet driver handle can't be null");
+    eth_driver->priv = priv;
+    eth_driver->stack_input = NULL;
+    eth_driver->stack_input_info = stack_input_info;
 err:
     return ret;
 }
@@ -321,25 +380,103 @@ esp_err_t esp_eth_transmit(esp_eth_handle_t hdl, void *buf, size_t length)
 {
     esp_err_t ret = ESP_OK;
     esp_eth_driver_t *eth_driver = (esp_eth_driver_t *)hdl;
+
+    if (atomic_load(&eth_driver->link) != ETH_LINK_UP) {
+        ret = ESP_ERR_INVALID_STATE;
+        ESP_LOGD(TAG, "Ethernet link is not up, can't transmit");
+        goto err;
+    }
+
     ESP_GOTO_ON_FALSE(buf, ESP_ERR_INVALID_ARG, err, TAG, "can't set buf to null");
     ESP_GOTO_ON_FALSE(length, ESP_ERR_INVALID_ARG, err, TAG, "buf length can't be zero");
     ESP_GOTO_ON_FALSE(eth_driver, ESP_ERR_INVALID_ARG, err, TAG, "ethernet driver handle can't be null");
     esp_eth_mac_t *mac = eth_driver->mac;
+
+#if CONFIG_ETH_TRANSMIT_MUTEX
+    if (xSemaphoreTake(eth_driver->transmit_mutex, pdMS_TO_TICKS(ESP_ETH_TX_TIMEOUT_MS)) == pdFALSE) {
+        return ESP_ERR_TIMEOUT;
+    }
+#endif // CONFIG_ETH_TRANSMIT_MUTEX
     ret = mac->transmit(mac, buf, length);
+#if CONFIG_ETH_TRANSMIT_MUTEX
+    xSemaphoreGive(eth_driver->transmit_mutex);
+#endif // CONFIG_ETH_TRANSMIT_MUTEX
 err:
     return ret;
 }
 
-esp_err_t esp_eth_receive(esp_eth_handle_t hdl, uint8_t *buf, uint32_t *length)
+static esp_err_t esp_eth_transmit_ctrl_bufs_fallback(esp_eth_mac_t *mac, const esp_eth_buf_desc_t *bufs, size_t buf_count)
+{
+    size_t total_len = 0;
+    for (size_t i = 0; i < buf_count; i++) {
+        total_len += bufs[i].len;
+    }
+
+    uint8_t *single_buff = (uint8_t *)malloc(total_len);
+    if (single_buff == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    size_t offset = 0;
+    for (size_t i = 0; i < buf_count; i++) {
+        memcpy(single_buff + offset, bufs[i].buf, bufs[i].len);
+        offset += bufs[i].len;
+    }
+
+    esp_err_t ret = mac->transmit(mac, single_buff, (uint32_t)total_len);
+    free(single_buff);
+    return ret;
+}
+
+esp_err_t esp_eth_transmit_ctrl_bufs(esp_eth_handle_t hdl, void *ctrl, const esp_eth_buf_desc_t *bufs, size_t buf_count)
 {
     esp_err_t ret = ESP_OK;
     esp_eth_driver_t *eth_driver = (esp_eth_driver_t *)hdl;
-    ESP_GOTO_ON_FALSE(buf && length, ESP_ERR_INVALID_ARG, err, TAG, "can't set buf and length to null");
-    ESP_GOTO_ON_FALSE(*length > 60, ESP_ERR_INVALID_ARG, err, TAG, "length can't be less than 60");
-    ESP_GOTO_ON_FALSE(eth_driver, ESP_ERR_INVALID_ARG, err, TAG, "ethernet driver handle can't be null");
+
+    if (atomic_load(&eth_driver->link) != ETH_LINK_UP) {
+        ret = ESP_ERR_INVALID_STATE;
+        ESP_LOGD(TAG, "Ethernet link is not up, can't transmit");
+        goto err;
+    }
+
     esp_eth_mac_t *mac = eth_driver->mac;
-    ret = mac->receive(mac, buf, length);
+
+#if CONFIG_ETH_TRANSMIT_MUTEX
+    if (xSemaphoreTake(eth_driver->transmit_mutex, pdMS_TO_TICKS(ESP_ETH_TX_TIMEOUT_MS)) == pdFALSE) {
+        return ESP_ERR_TIMEOUT;
+    }
+#endif // CONFIG_ETH_TRANSMIT_MUTEX
+
+    // if the underlying MAC does not support transmit_ctrl_bufs (multiple buffer zero-copy transmit), use the fallback
+    if (mac->transmit_ctrl_bufs) {
+        ret = mac->transmit_ctrl_bufs(mac, ctrl, bufs, buf_count);
+    } else {
+        ESP_LOGD(TAG, "Using fallback transmit function (transmit control and multiple buffer zero-copy not supported)");
+        ret = esp_eth_transmit_ctrl_bufs_fallback(mac, bufs, buf_count);
+    }
+
+#if CONFIG_ETH_TRANSMIT_MUTEX
+    xSemaphoreGive(eth_driver->transmit_mutex);
+#endif // CONFIG_ETH_TRANSMIT_MUTEX
 err:
+    return ret;
+}
+
+esp_err_t esp_eth_transmit_ctrl_vargs(esp_eth_handle_t hdl, void *ctrl, uint32_t argc, ...)
+{
+    esp_err_t ret = ESP_OK;
+    uint32_t buf_num = argc / 2;
+    esp_eth_buf_desc_t stack_bufs[buf_num];
+    va_list args = {0};
+
+    va_start(args, argc);
+    for (uint32_t i = 0; i < buf_num; i++) {
+        stack_bufs[i].buf = va_arg(args, uint8_t *);
+        stack_bufs[i].len = va_arg(args, uint32_t);
+    }
+    va_end(args);
+
+    ret = esp_eth_transmit_ctrl_bufs(hdl, ctrl, stack_bufs, buf_num);
     return ret;
 }
 
@@ -360,34 +497,140 @@ esp_err_t esp_eth_ioctl(esp_eth_handle_t hdl, esp_eth_io_cmd_t cmd, void *data)
         ESP_GOTO_ON_ERROR(mac->get_addr(mac, (uint8_t *)data), err, TAG, "get mac address failed");
         break;
     case ETH_CMD_S_PHY_ADDR:
-        ESP_GOTO_ON_FALSE(data, ESP_ERR_INVALID_ARG, err, TAG, "can't set phy addr to null");
-        ESP_GOTO_ON_ERROR(phy->set_addr(phy, (uint32_t)data), err, TAG, "set phy address failed");
+        ESP_GOTO_ON_ERROR(phy->set_addr(phy, *(uint32_t *)data), err, TAG, "set phy address failed");
         break;
     case ETH_CMD_G_PHY_ADDR:
         ESP_GOTO_ON_FALSE(data, ESP_ERR_INVALID_ARG, err, TAG, "no mem to store phy addr");
         ESP_GOTO_ON_ERROR(phy->get_addr(phy, (uint32_t *)data), err, TAG, "get phy address failed");
+        break;
+    case ETH_CMD_S_AUTONEGO:
+        ESP_GOTO_ON_FALSE(data, ESP_ERR_INVALID_ARG, err, TAG, "can't set autonegotiation to null");
+        // check if driver is stopped; configuration should be changed only when transmitting/receiving is not active
+        ESP_GOTO_ON_FALSE(atomic_load(&eth_driver->fsm) == ESP_ETH_FSM_STOP, ESP_ERR_INVALID_STATE, err, TAG, "link configuration is only allowed when driver is stopped");
+        if (*(bool *)data == true) {
+            ESP_GOTO_ON_ERROR(phy->autonego_ctrl(phy, ESP_ETH_PHY_AUTONEGO_EN, &eth_driver->auto_nego_en), err, TAG, "phy negotiation enable failed");
+        } else {
+            ESP_GOTO_ON_ERROR(phy->autonego_ctrl(phy, ESP_ETH_PHY_AUTONEGO_DIS, &eth_driver->auto_nego_en), err, TAG, "phy negotiation disable failed");
+        }
+        break;
+    case ETH_CMD_G_AUTONEGO:
+        ESP_GOTO_ON_FALSE(data, ESP_ERR_INVALID_ARG, err, TAG, "no mem to store autonegotiation configuration");
+        *(bool *)data = eth_driver->auto_nego_en;
+        break;
+    case ETH_CMD_S_SPEED:
+        ESP_GOTO_ON_FALSE(data, ESP_ERR_INVALID_ARG, err, TAG, "can't set speed to null");
+        // check if driver is stopped; configuration should be changed only when transmitting/receiving is not active
+        ESP_GOTO_ON_FALSE(atomic_load(&eth_driver->fsm) == ESP_ETH_FSM_STOP, ESP_ERR_INVALID_STATE, err, TAG, "link configuration is only allowed when driver is stopped");
+        ESP_GOTO_ON_FALSE(eth_driver->auto_nego_en == false, ESP_ERR_INVALID_STATE, err, TAG, "autonegotiation needs to be disabled to change this parameter");
+        ESP_GOTO_ON_ERROR(phy->set_speed(phy, *(eth_speed_t *)data), err, TAG, "set speed mode failed");
         break;
     case ETH_CMD_G_SPEED:
         ESP_GOTO_ON_FALSE(data, ESP_ERR_INVALID_ARG, err, TAG, "no mem to store speed value");
         *(eth_speed_t *)data = eth_driver->speed;
         break;
     case ETH_CMD_S_PROMISCUOUS:
-        ESP_GOTO_ON_ERROR(mac->set_promiscuous(mac, (bool)data), err, TAG, "set promiscuous mode failed");
+        ESP_GOTO_ON_FALSE(data, ESP_ERR_INVALID_ARG, err, TAG, "can't set promiscuous to null");
+        ESP_GOTO_ON_ERROR(mac->set_promiscuous(mac, *(bool *)data), err, TAG, "set promiscuous mode failed");
+        break;
+    case ETH_CMD_S_ALL_MULTICAST:
+        ESP_GOTO_ON_FALSE(data, ESP_ERR_INVALID_ARG, err, TAG, "can't set all multicast to null");
+        ESP_GOTO_ON_FALSE(mac->set_all_multicast != NULL, ESP_ERR_NOT_SUPPORTED, err, TAG, "set receive all multicast not supported");
+        ESP_GOTO_ON_ERROR(mac->set_all_multicast(mac, *(bool *)data), err, TAG, "set all multicast mode failed");
         break;
     case ETH_CMD_S_FLOW_CTRL:
-        ESP_GOTO_ON_ERROR(mac->enable_flow_ctrl(mac, (bool)data), err, TAG, "enable mac flow control failed");
-        ESP_GOTO_ON_ERROR(phy->advertise_pause_ability(phy, (uint32_t)data), err, TAG, "phy advertise pause ability failed");
+        ESP_GOTO_ON_FALSE(data, ESP_ERR_INVALID_ARG, err, TAG, "can't set flow ctrl to null");
+        ESP_GOTO_ON_ERROR(mac->enable_flow_ctrl(mac, *(bool *)data), err, TAG, "enable mac flow control failed");
+        ESP_GOTO_ON_ERROR(phy->advertise_pause_ability(phy, *(uint32_t *)data), err, TAG, "phy advertise pause ability failed");
+        break;
+    case ETH_CMD_S_DUPLEX_MODE:
+        ESP_GOTO_ON_FALSE(data, ESP_ERR_INVALID_ARG, err, TAG, "can't set duplex to null");
+        ESP_GOTO_ON_FALSE(eth_driver->auto_nego_en == false, ESP_ERR_INVALID_STATE, err, TAG, "autonegotiation needs to be disabled to change this parameter");
+        // check if driver is stopped; configuration should be changed only when transmitting/receiving is not active
+        ESP_GOTO_ON_FALSE(atomic_load(&eth_driver->fsm) == ESP_ETH_FSM_STOP, ESP_ERR_INVALID_STATE, err, TAG, "link configuration is only allowed when driver is stopped");
+        ESP_GOTO_ON_ERROR(phy->set_duplex(phy, *(eth_duplex_t *)data), err, TAG, "set duplex mode failed");
         break;
     case ETH_CMD_G_DUPLEX_MODE:
         ESP_GOTO_ON_FALSE(data, ESP_ERR_INVALID_ARG, err, TAG, "no mem to store duplex value");
         *(eth_duplex_t *)data = eth_driver->duplex;
         break;
+    case ETH_CMD_S_PHY_LOOPBACK:
+        ESP_GOTO_ON_FALSE(data, ESP_ERR_INVALID_ARG, err, TAG, "can't set loopback to null");
+        ESP_GOTO_ON_ERROR(phy->loopback(phy, *(bool *)data), err, TAG, "configuration of phy loopback mode failed");
+        break;
+    case ETH_CMD_S_PHY_MASTER_MODE:
+        ESP_GOTO_ON_FALSE(data, ESP_ERR_INVALID_ARG, err, TAG, "can't set master mode to null");
+        ESP_GOTO_ON_FALSE(phy->set_master_mode != NULL, ESP_ERR_NOT_SUPPORTED, err, TAG, "set PHY master mode not supported");
+        // check if driver is stopped; configuration should be changed only when transmitting/receiving is not active
+        ESP_GOTO_ON_FALSE(atomic_load(&eth_driver->fsm) == ESP_ETH_FSM_STOP, ESP_ERR_INVALID_STATE, err, TAG, "link configuration is only allowed when driver is stopped");
+        ESP_GOTO_ON_ERROR(phy->set_master_mode(phy, *(bool *)data), err, TAG, "set PHY master mode failed");
+        break;
+    case ETH_CMD_G_PHY_MASTER_MODE:
+        ESP_GOTO_ON_FALSE(data, ESP_ERR_INVALID_ARG, err, TAG, "no mem to store master mode value");
+        ESP_GOTO_ON_FALSE(phy->get_master_mode != NULL, ESP_ERR_NOT_SUPPORTED, err, TAG, "get PHY master mode not supported");
+        ESP_GOTO_ON_ERROR(phy->get_master_mode(phy, (bool *)data), err, TAG, "get PHY master mode failed");
+        break;
+    case ETH_CMD_READ_PHY_REG: {
+        uint32_t phy_addr;
+        ESP_GOTO_ON_FALSE(data, ESP_ERR_INVALID_ARG, err, TAG, "invalid register read/write info");
+        esp_eth_phy_reg_rw_data_t *phy_r_data = (esp_eth_phy_reg_rw_data_t *)data;
+        ESP_GOTO_ON_FALSE(phy_r_data->reg_value_p, ESP_ERR_INVALID_ARG, err, TAG, "can't read registers to null");
+        ESP_GOTO_ON_ERROR(phy->get_addr(phy, &phy_addr), err, TAG, "get phy address failed");
+        ESP_GOTO_ON_ERROR(eth_driver->mediator.phy_reg_read(&eth_driver->mediator,
+                          phy_addr, phy_r_data->reg_addr, phy_r_data->reg_value_p), err, TAG, "failed to read PHY register");
+        }
+        break;
+    case ETH_CMD_WRITE_PHY_REG: {
+        uint32_t phy_addr;
+        ESP_GOTO_ON_FALSE(data, ESP_ERR_INVALID_ARG, err, TAG, "invalid register read/write info");
+        esp_eth_phy_reg_rw_data_t *phy_w_data = (esp_eth_phy_reg_rw_data_t *)data;
+        ESP_GOTO_ON_FALSE(phy_w_data->reg_value_p, ESP_ERR_INVALID_ARG, err, TAG, "can't write registers from null");
+        ESP_GOTO_ON_ERROR(phy->get_addr(phy, &phy_addr), err, TAG, "get phy address failed");
+        ESP_GOTO_ON_ERROR(eth_driver->mediator.phy_reg_write(&eth_driver->mediator,
+                          phy_addr, phy_w_data->reg_addr, *(phy_w_data->reg_value_p)), err, TAG, "failed to write PHY register");
+        }
+        break;
+    case ETH_CMD_ADD_MAC_FILTER: {
+        ESP_GOTO_ON_FALSE(data, ESP_ERR_INVALID_ARG, err, TAG, "can't set mac addr to null");
+        ESP_GOTO_ON_FALSE(mac->add_mac_filter != NULL, ESP_ERR_NOT_SUPPORTED, err, TAG, "add mac address to filter not supported");
+        ESP_GOTO_ON_ERROR(mac->add_mac_filter(mac, (uint8_t *)data), err, TAG, "add mac address to filter failed");
+        }
+        break;
+    case ETH_CMD_DEL_MAC_FILTER: {
+        ESP_GOTO_ON_FALSE(data, ESP_ERR_INVALID_ARG, err, TAG, "can't set mac addr to null");
+        ESP_GOTO_ON_FALSE(mac->rm_mac_filter != NULL, ESP_ERR_NOT_SUPPORTED, err, TAG, "remove mac address from filter not supported");
+        ESP_GOTO_ON_ERROR(mac->rm_mac_filter(mac, (uint8_t *)data), err, TAG, "remove mac address from filter failed");
+        }
+        break;
     default:
-        ESP_GOTO_ON_FALSE(false, ESP_ERR_INVALID_ARG, err, TAG, "unknown io command: %d", cmd);
+        if (phy->custom_ioctl != NULL && cmd >= ETH_CMD_CUSTOM_PHY_CMDS) {
+            ret = phy->custom_ioctl(phy, cmd, data);
+        } else if (mac->custom_ioctl != NULL && cmd >= ETH_CMD_CUSTOM_MAC_CMDS) {
+            ret = mac->custom_ioctl(mac, cmd, data);
+        } else {
+            ESP_GOTO_ON_FALSE(false, ESP_ERR_INVALID_ARG, err, TAG, "unknown io command: %d", cmd);
+        }
         break;
     }
 err:
     return ret;
+}
+
+esp_err_t esp_eth_get_phy_instance(esp_eth_handle_t hdl, esp_eth_phy_t **phy)
+{
+    esp_eth_driver_t *eth_driver = (esp_eth_driver_t *)hdl;
+    ESP_RETURN_ON_FALSE(eth_driver, ESP_ERR_INVALID_ARG, TAG, "ethernet driver handle can't be null");
+    ESP_RETURN_ON_FALSE(phy != NULL, ESP_ERR_INVALID_ARG, TAG, "can't store PHY instance to null");
+    *phy = eth_driver->phy;
+    return ESP_OK;
+}
+
+esp_err_t esp_eth_get_mac_instance(esp_eth_handle_t hdl, esp_eth_mac_t **mac)
+{
+    esp_eth_driver_t *eth_driver = (esp_eth_driver_t *)hdl;
+    ESP_RETURN_ON_FALSE(eth_driver, ESP_ERR_INVALID_ARG, TAG, "ethernet driver handle can't be null");
+    ESP_RETURN_ON_FALSE(mac != NULL, ESP_ERR_INVALID_ARG, TAG, "can't store MAC instance to null");
+    *mac = eth_driver->mac;
+    return ESP_OK;
 }
 
 esp_err_t esp_eth_increase_reference(esp_eth_handle_t hdl)

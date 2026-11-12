@@ -1,27 +1,22 @@
 #!/usr/bin/env python
 #
-# Copyright 2020 Espressif Systems (Shanghai) PTE LTD
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-FileCopyrightText: 2020-2022 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 
 import argparse
 import os
-from sys import exit
+import sys
+from collections.abc import Iterable
 
-from idf_ci_utils import is_executable
+try:
+    from idf_ci_utils import is_executable
+except ImportError:
+    sys.path.append(os.path.join(os.path.dirname(__file__)))
+
+    from idf_ci_utils import is_executable
 
 
-def _strip_each_item(iterable):
+def _strip_each_item(iterable: Iterable) -> list:
     res = []
     for item in iterable:
         if item:
@@ -34,31 +29,38 @@ EXECUTABLE_LIST_FN = os.path.join(IDF_PATH, 'tools/ci/executable-list.txt')
 known_executables = _strip_each_item(open(EXECUTABLE_LIST_FN).readlines())
 
 
-def check_executable_list():
+def check_executable_list() -> int:
     ret = 0
     for index, fn in enumerate(known_executables):
         if not os.path.exists(os.path.join(IDF_PATH, fn)):
-            print('{}:{} {} not exists. Please remove it manually'.format(EXECUTABLE_LIST_FN, index + 1, fn))
+            print(f'{EXECUTABLE_LIST_FN}:{index + 1} {fn} not exists. Please remove it manually')
             ret = 1
     return ret
 
 
-def check_executables(files):
+def check_executables(files: list) -> int:
     ret = 0
     for fn in files:
-        if not is_executable(fn):
-            continue
-        if fn not in known_executables:
-            print('"{}" is not in {}'.format(fn, EXECUTABLE_LIST_FN))
+        fn_executable = is_executable(fn)
+        fn_in_list = fn in known_executables
+        if fn_executable and not fn_in_list:
+            print(f'"{fn}" is not in {EXECUTABLE_LIST_FN}')
+            ret = 1
+        if not fn_executable and fn_in_list:
+            print(f'"{fn}" is not executable but is in {EXECUTABLE_LIST_FN}')
             ret = 1
     return ret
 
 
-def main():
+def check() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument('--action', choices=['executables', 'list'], required=True,
-                        help='if "executables", pass all your executables to see if it\'s in the list.'
-                             'if "list", check if all items on your list exist')
+    parser.add_argument(
+        '--action',
+        choices=['executables', 'list'],
+        required=True,
+        help='if "executables", pass all your executables to see if it\'s in the list.'
+        'if "list", check if all items on your list exist',
+    )
     parser.add_argument('filenames', nargs='*', help='Filenames to check.')
     args = parser.parse_args()
 
@@ -73,4 +75,4 @@ def main():
 
 
 if __name__ == '__main__':
-    exit(main())
+    sys.exit(check())

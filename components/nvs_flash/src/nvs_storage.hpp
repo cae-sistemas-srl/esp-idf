@@ -1,25 +1,18 @@
-// Copyright 2015-2016 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-#ifndef nvs_storage_hpp
-#define nvs_storage_hpp
+/*
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+#pragma once
 
 #include <memory>
+#include <cstdlib>
 #include <unordered_map>
 #include "nvs.hpp"
 #include "nvs_types.hpp"
 #include "nvs_page.hpp"
 #include "nvs_pagemanager.hpp"
+#include "nvs_memory_management.hpp"
 #include "partition.hpp"
 
 //extern void dumpBytes(const uint8_t* data, size_t count);
@@ -27,14 +20,14 @@
 namespace nvs
 {
 
-class Storage : public intrusive_list_node<Storage>
+class Storage : public intrusive_list_node<Storage>, public ExceptionlessAllocatable
 {
     enum class StorageState : uint32_t {
         INVALID,
         ACTIVE,
     };
 
-    struct NamespaceEntry : public intrusive_list_node<NamespaceEntry> {
+    struct NamespaceEntry : public intrusive_list_node<NamespaceEntry>, public ExceptionlessAllocatable {
     public:
         char mName[Item::MAX_KEY_LENGTH + 1];
         uint8_t mIndex;
@@ -42,18 +35,21 @@ class Storage : public intrusive_list_node<Storage>
 
     typedef intrusive_list<NamespaceEntry> TNamespaces;
 
-    struct UsedPageNode: public intrusive_list_node<UsedPageNode> {
+    struct UsedPageNode: public intrusive_list_node<UsedPageNode>, public ExceptionlessAllocatable {
         public: Page* mPage;
     };
 
     typedef intrusive_list<UsedPageNode> TUsedPageList;
 
-    struct BlobIndexNode: public intrusive_list_node<BlobIndexNode> {
+    struct BlobIndexNode: public intrusive_list_node<BlobIndexNode>, public ExceptionlessAllocatable {
         public:
             char key[Item::MAX_KEY_LENGTH + 1];
             uint8_t nsIndex;
             uint8_t chunkCount;
             VerOffset chunkStart;
+            size_t dataSize;
+            size_t observedDataSize;
+            size_t observedChunkCount;
     };
 
     typedef intrusive_list<BlobIndexNode> TBlobIndexList;
@@ -67,24 +63,28 @@ public:
         }
     };
 
-    esp_err_t init(uint32_t baseSector, uint32_t sectorCount);
+    esp_err_t init(uint32_t baseSector, uint32_t sectorCount, bool allowRepair = true);
+
+    esp_err_t enableWrite();
 
     bool isValid() const;
 
     esp_err_t createOrOpenNamespace(const char* nsName, bool canCreate, uint8_t& nsIndex);
 
-    esp_err_t writeItem(uint8_t nsIndex, ItemType datatype, const char* key, const void* data, size_t dataSize);
+    esp_err_t writeItem(uint8_t nsIndex, ItemType datatype, const char* key, const void* data, size_t dataSize, const bool purgeAfterErase);
 
-    esp_err_t readItem(uint8_t nsIndex, ItemType datatype, const char* key, void* data, size_t dataSize);
+    esp_err_t readItem(uint8_t nsIndex, ItemType datatype, const char* key, void* data, size_t dataSize, bool allowRepair = true);
 
-    esp_err_t getItemDataSize(uint8_t nsIndex, ItemType datatype, const char* key, size_t& dataSize);
+    esp_err_t findKey(const uint8_t nsIndex, const char* key, ItemType* datatype, bool allowRepair = true);
 
-    esp_err_t eraseItem(uint8_t nsIndex, ItemType datatype, const char* key);
+    esp_err_t getItemDataSize(uint8_t nsIndex, ItemType datatype, const char* key, size_t& dataSize, bool allowRepair = true);
+
+    esp_err_t eraseItem(uint8_t nsIndex, ItemType datatype, const char* key, const bool purgeAfterErase);
 
     template<typename T>
-    esp_err_t writeItem(uint8_t nsIndex, const char* key, const T& value)
+    esp_err_t writeItem(uint8_t nsIndex, const char* key, const T& value, const bool purgeAfterErase)
     {
-        return writeItem(nsIndex, itemTypeOf(value), key, &value, sizeof(value));
+        return writeItem(nsIndex, itemTypeOf(value), key, &value, sizeof(value), purgeAfterErase);
     }
 
     template<typename T>
@@ -93,12 +93,14 @@ public:
         return readItem(nsIndex, itemTypeOf(value), key, &value, sizeof(value));
     }
 
-    esp_err_t eraseItem(uint8_t nsIndex, const char* key)
+    esp_err_t eraseItem(uint8_t nsIndex, const char* key, const bool purgeAfterErase)
     {
-        return eraseItem(nsIndex, ItemType::ANY, key);
+        return eraseItem(nsIndex, ItemType::ANY, key, purgeAfterErase);
     }
 
-    esp_err_t eraseNamespace(uint8_t nsIndex);
+    esp_err_t eraseNamespace(uint8_t nsIndex, const bool purgeAfterErase);
+
+    esp_err_t purgeNamespace(uint8_t nsIndex);
 
     const Partition *getPart() const
     {
@@ -115,13 +117,13 @@ public:
         return mPageManager.getBaseSector();
     }
 
-    esp_err_t writeMultiPageBlob(uint8_t nsIndex, const char* key, const void* data, size_t dataSize, VerOffset chunkStart);
+    esp_err_t writeMultiPageBlob(uint8_t nsIndex, const char* key, const void* data, size_t dataSize, VerOffset chunkStart, const bool purgeAfterErase);
 
-    esp_err_t readMultiPageBlob(uint8_t nsIndex, const char* key, void* data, size_t dataSize);
+    esp_err_t readMultiPageBlob(uint8_t nsIndex, const char* key, void* data, size_t dataSize, bool allowRepair = true);
 
     esp_err_t cmpMultiPageBlob(uint8_t nsIndex, const char* key, const void* data, size_t dataSize);
 
-    esp_err_t eraseMultiPageBlob(uint8_t nsIndex, const char* key, VerOffset chunkStart = VerOffset::VER_ANY);
+    esp_err_t eraseMultiPageBlob(uint8_t nsIndex, const char* key, const bool purgeAfterErase, VerOffset chunkStart = VerOffset::VER_ANY);
 
     void debugDump();
 
@@ -129,9 +131,11 @@ public:
 
     esp_err_t fillStats(nvs_stats_t& nvsStats);
 
-    esp_err_t calcEntriesInNamespace(uint8_t nsIndex, size_t& usedEntries);
+    esp_err_t calcEntriesInNamespace(uint8_t nsIndex, size_t& usedEntries, bool allowRepair = true);
 
-    bool findEntry(nvs_opaque_iterator_t*, const char* name);
+    bool findEntry(nvs_opaque_iterator_t* it, const char* name);
+
+    bool findEntryNs(nvs_opaque_iterator_t* it, uint8_t nsIndex);
 
     bool nextEntry(nvs_opaque_iterator_t* it);
 
@@ -144,13 +148,15 @@ protected:
 
     void clearNamespaces();
 
-    esp_err_t populateBlobIndices(TBlobIndexList&);
+    esp_err_t populateBlobIndices(TBlobIndexList&, bool allowRepair);
+
+    void eraseMismatchedBlobIndexes(TBlobIndexList&);
 
     void eraseOrphanDataBlobs(TBlobIndexList&);
 
     void fillEntryInfo(Item &item, nvs_entry_info_t &info);
 
-    esp_err_t findItem(uint8_t nsIndex, ItemType datatype, const char* key, Page* &page, Item& item, uint8_t chunkIdx = Page::CHUNK_ANY, VerOffset chunkStart = VerOffset::VER_ANY);
+    esp_err_t findItem(uint8_t nsIndex, ItemType datatype, const char* key, Page* &page, Item& item, uint8_t chunkIdx = Page::CHUNK_ANY, VerOffset chunkStart = VerOffset::VER_ANY, size_t* itemIndex = NULL, bool allowRepair = true);
 
 protected:
     Partition *mPartition;
@@ -159,6 +165,9 @@ protected:
     TNamespaces mNamespaces;
     CompressedEnumTable<bool, 1, 256> mNamespaceUsage;
     StorageState mState = StorageState::INVALID;
+    uint32_t mBaseSector = 0;
+    uint32_t mSectorCount = 0;
+    bool mWriteEnabled = false;
 };
 
 } // namespace nvs
@@ -172,5 +181,3 @@ struct nvs_opaque_iterator_t
     intrusive_list<nvs::Page>::iterator page;
     nvs_entry_info_t entry_info;
 };
-
-#endif /* nvs_storage_hpp */

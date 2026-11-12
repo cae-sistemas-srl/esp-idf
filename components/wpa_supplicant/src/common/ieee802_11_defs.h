@@ -72,9 +72,19 @@
 #define WLAN_AUTH_OPEN			0
 #define WLAN_AUTH_SHARED_KEY		1
 #define WLAN_AUTH_FT			2
+#define WLAN_AUTH_SAE           	3
 #define WLAN_AUTH_LEAP			128
+#define WLAN_AUTH_PASN			7
 
 #define WLAN_AUTH_CHALLENGE_LEN 128
+
+/* Authentication transaction sequence number */
+#define WLAN_AUTH_TR_SEQ_SAE_COMMIT 1
+#define WLAN_AUTH_TR_SEQ_SAE_CONFIRM 2
+
+#define WLAN_AUTH_TR_SEQ_PASN_AUTH1 1
+#define WLAN_AUTH_TR_SEQ_PASN_AUTH2 2
+#define WLAN_AUTH_TR_SEQ_PASN_AUTH3 3
 
 #define WLAN_CAPABILITY_ESS BIT(0)
 #define WLAN_CAPABILITY_IBSS BIT(1)
@@ -157,6 +167,10 @@
 #define WLAN_STATUS_DENIED_WITH_SUGGESTED_BAND_AND_CHANNEL 99
 #define WLAN_STATUS_ASSOC_DENIED_NO_VHT 104
 #define WLAN_STATUS_UNKNOWN_PASSWORD_IDENTIFIER 123
+#define WLAN_STATUS_SAE_HASH_TO_ELEMENT 126
+#define WLAN_STATUS_SAE_PK 127
+#define WLAN_STATUS_INVALID_PUBLIC_KEY 136
+#define WLAN_STATUS_PASN_BASE_AKMP_FAILED 137
 
 /* Reason codes (IEEE Std 802.11-2016, 9.4.1.7, Table 9-45) */
 #define WLAN_REASON_UNSPECIFIED 1
@@ -183,6 +197,8 @@
 #define WLAN_REASON_INVALID_RSN_IE_CAPAB 22
 #define WLAN_REASON_IEEE_802_1X_AUTH_FAILED 23
 #define WLAN_REASON_CIPHER_SUITE_REJECTED 24
+#define WLAN_REASON_INVALID_PMKID 49
+#define WLAN_REASON_INVALID_MDE 50
 
 /* Information Element IDs (IEEE Std 802.11-2016, 9.4.2.1, Table 9-77) */
 #define WLAN_EID_SSID 0
@@ -212,6 +228,7 @@
 #define WLAN_EID_FAST_BSS_TRANSITION 55
 #define WLAN_EID_TIMEOUT_INTERVAL 56
 #define WLAN_EID_RIC_DATA 57
+#define WLAN_EID_SUPPORTED_OPERATING_CLASSES 59
 #define WLAN_EID_HT_OPERATION 61
 #define WLAN_EID_SECONDARY_CHANNEL_OFFSET 62
 #define WLAN_EID_WAPI 68
@@ -220,13 +237,16 @@
 #define WLAN_EID_20_40_BSS_INTOLERANT 73
 #define WLAN_EID_OVERLAPPING_BSS_SCAN_PARAMS 74
 #define WLAN_EID_MMIE 76
+#define WLAN_EID_ADV_PROTO 108
 #define WLAN_EID_EXT_CAPAB 127
+#define WLAN_EID_MIC 140
 #define WLAN_EID_VENDOR_SPECIFIC 221
 #define WLAN_EID_CAG_NUMBER 237
 #define WLAN_EID_AP_CSN 239
 #define WLAN_EID_FILS_INDICATION 240
 #define WLAN_EID_DILS 241
 #define WLAN_EID_FRAGMENT 242
+#define WLAN_EID_RSNX 244
 #define WLAN_EID_EXTENSION 255
 
 /* Element ID Extension (EID 255) values */
@@ -248,6 +268,22 @@
 #define WLAN_EID_EXT_PASSWORD_IDENTIFIER 33
 #define WLAN_EID_EXT_HE_CAPABILITIES 35
 #define WLAN_EID_EXT_HE_OPERATION 36
+#define WLAN_EID_EXT_REJECTED_GROUPS 92
+#define WLAN_EID_EXT_ANTI_CLOGGING_TOKEN 93
+#define WLAN_EID_EXT_AKM_SUITE_SELECTOR 114
+#define WLAN_EID_EXT_PASN_ENCRYPTED_DATA 140
+#define WLAN_EID_EXT_PASN_PARAMS 100
+#define WLAN_EID_EXT_PASN_ENCRYPTED_DATA 140
+
+/* Extended RSN Capabilities */
+/* bits 0-3: Field length (n-1) */
+#define WLAN_RSNX_CAPAB_SAE_H2E 5
+#define WLAN_RSNX_CAPAB_SAE_PK 6
+#define WLAN_RSNX_CAPAB_SECURE_LTF 8
+#define WLAN_RSNX_CAPAB_KEK_IN_PASN 18
+
+#define WLAN_EXT_CAPAB_20_40_COEX 0
+#define WLAN_EXT_CAPAB_BSS_TRANSITION 19
 
 /* Action frame categories (IEEE Std 802.11-2016, 9.4.1.11, Table 9-76) */
 #define WLAN_ACTION_SPECTRUM_MGMT 0
@@ -281,8 +317,15 @@
 #define WLAN_TIMEOUT_KEY_LIFETIME 2
 #define WLAN_TIMEOUT_ASSOC_COMEBACK 3
 
-#define OUI_WFA 0x506f9a
+/* DPP Public Action frame identifiers - OUI_WFA */
 #define DPP_OUI_TYPE 0x1A
+#define OUI_WFA 0x506f9a
+#define WFA_RSNE_OVERRIDE_OUI_TYPE 0x29
+#define WFA_RSNXE_OVERRIDE_OUI_TYPE 0x2b
+#define WFA_RSN_SELECTION_OUI_TYPE 0x2c
+#define RSNE_OVERRIDE_IE_VENDOR_TYPE 0x506f9a29
+#define RSNXE_OVERRIDE_IE_VENDOR_TYPE 0x506f9a2b
+#define RSN_SELECTION_IE_VENDOR_TYPE 0x506f9a2c
 
 #ifdef _MSC_VER
 #pragma pack(push, 1)
@@ -382,6 +425,25 @@ struct ieee80211_action {
         struct ieee80211_public_action public_action;
     } u;
 } STRUCT_PACKED;
+
+/* Authentication frame (management frame, type AUTH). Layout is the same as
+ * the auth variant of struct ieee80211_mgmt (u.auth) for PASN and other
+ * auth frame handling. */
+struct ieee80211_auth {
+	le16 frame_control;
+	le16 duration;
+	u8 da[6];
+	u8 sa[6];
+	u8 bssid[6];
+	le16 seq_ctrl;
+	struct {
+		le16 auth_alg;
+		le16 auth_transaction;
+		le16 status_code;
+		/* possibly followed by Challenge text */
+		u8 variable[];
+	} STRUCT_PACKED auth;
+};
 #endif /* ESP_SUPPLICANT */
 
 #define IEEE80211_MAX_MMPDU_SIZE 2304
@@ -514,6 +576,12 @@ struct ieee80211_ht_operation {
 #define HT_OPER_PARAM_PCO_PHASE				((u16) BIT(11))
 /* B36..B39 - Reserved */
 
+#define MULTI_AP_SUB_ELEM_TYPE 0x06
+#define MULTI_AP_TEAR_DOWN BIT(4)
+#define MULTI_AP_FRONTHAUL_BSS BIT(5)
+#define MULTI_AP_BACKHAUL_BSS BIT(6)
+#define MULTI_AP_BACKHAUL_STA BIT(7)
+
 #define WMM_OUI_TYPE 2
 #define WMM_OUI_SUBTYPE_INFORMATION_ELEMENT 0
 #define WMM_OUI_SUBTYPE_PARAMETER_ELEMENT 1
@@ -535,6 +603,19 @@ struct ieee80211_ht_operation {
 #define WMM_TSPEC_DIRECTION_DOWNLINK 1
 /* 2 - Reserved */
 #define WMM_TSPEC_DIRECTION_BI_DIRECTIONAL 3
+
+#define OSEN_IE_VENDOR_TYPE 0x506f9a12
+#define NAN_IE_VENDOR_TYPE 0x506f9a13
+#define NAN_SDF_VENDOR_TYPE 0x506f9a13
+#define NAN_OUI_TYPE 0x13
+#define MBO_IE_VENDOR_TYPE 0x506f9a16
+#define NAN_NAF_VENDOR_TYPE 0x506f9a18
+#define SAE_PK_IE_VENDOR_TYPE 0x506f9a1f
+#define SAE_PK_OUI_TYPE 0x1f
+#define MBO_OUI_TYPE 22
+#define OCE_STA BIT(0)
+#define OCE_STA_CFON BIT(1)
+#define OCE_AP BIT(2)
 
 /*
  * WMM Information Element (used in (Re)Association Request frames; may also be
@@ -622,6 +703,45 @@ enum wmm_ac {
 	WMM_AC_NUM = 4
 };
 
+/* MBO v0.0_r19, 4.2: MBO Attributes */
+/* Table 4-5: MBO Attributes */
+/* OCE v0.0.10, Table 4-3: OCE Attributes */
+enum mbo_attr_id {
+	MBO_ATTR_ID_AP_CAPA_IND = 1,
+	MBO_ATTR_ID_NON_PREF_CHAN_REPORT = 2,
+	MBO_ATTR_ID_CELL_DATA_CAPA = 3,
+	MBO_ATTR_ID_ASSOC_DISALLOW = 4,
+	MBO_ATTR_ID_CELL_DATA_PREF = 5,
+	MBO_ATTR_ID_TRANSITION_REASON = 6,
+	MBO_ATTR_ID_TRANSITION_REJECT_REASON = 7,
+	MBO_ATTR_ID_ASSOC_RETRY_DELAY = 8,
+	OCE_ATTR_ID_CAPA_IND = 101,
+	OCE_ATTR_ID_RSSI_BASED_ASSOC_REJECT = 102,
+	OCE_ATTR_ID_REDUCED_WAN_METRICS = 103,
+	OCE_ATTR_ID_RNR_COMPLETENESS = 104,
+};
+
+/* MBO v0.0_r19, 4.2.1: MBO AP Capability Indication Attribute */
+/* Table 4-7: MBO AP Capability Indication Field Values */
+#define MBO_AP_CAPA_CELL_AWARE BIT(6)
+
+/* MBO v0.0_r19, 4.2.2: Non-preferred Channel Report Attribute */
+/* Table 4-10: Reason Code Field Values */
+enum mbo_non_pref_chan_reason {
+	MBO_NON_PREF_CHAN_REASON_UNSPECIFIED = 0,
+	MBO_NON_PREF_CHAN_REASON_RSSI = 1,
+	MBO_NON_PREF_CHAN_REASON_EXT_INTERFERENCE = 2,
+	MBO_NON_PREF_CHAN_REASON_INT_INTERFERENCE = 3,
+};
+
+/* MBO v0.0_r19, 4.2.3: Cellular Data Capabilities Attribute */
+/* Table 4-13: Cellular Data Connectivity Field */
+enum mbo_cellular_capa {
+	MBO_CELL_CAPA_AVAILABLE = 1,
+	MBO_CELL_CAPA_NOT_AVAILABLE = 2,
+	MBO_CELL_CAPA_NOT_SUPPORTED = 3,
+};
+
 /* MBO v0.0_r19, 4.2.7: Transition Rejection Reason Code Attribute */
 /* Table 4-21: Transition Rejection Reason Code Field Values */
 enum mbo_transition_reject_reason {
@@ -633,6 +753,12 @@ enum mbo_transition_reject_reason {
 	MBO_TRANSITION_REJECT_REASON_INTERFERENCE = 5,
 	MBO_TRANSITION_REJECT_REASON_SERVICES = 6,
 };
+
+/* OCE v0.0.10, 4.2.1: OCE Capability Indication Attribute */
+#define OCE_RELEASE 1
+#define OCE_RELEASE_MASK (BIT(0) | BIT(1) | BIT(2))
+#define OCE_IS_STA_CFON BIT(3)
+#define OCE_IS_NON_OCE_AP_PRESENT BIT(4)
 
 /* IEEE 802.11v - WNM Action field values */
 enum wnm_action {
@@ -850,6 +976,7 @@ enum phy_type {
 	PHY_TYPE_HT = 7,
 	PHY_TYPE_DMG = 8,
 	PHY_TYPE_VHT = 9,
+	PHY_TYPE_HE = 14,
 };
 
 /* IEEE P802.11-REVmc/D5.0, 9.4.2.37 - Neighbor Report element */

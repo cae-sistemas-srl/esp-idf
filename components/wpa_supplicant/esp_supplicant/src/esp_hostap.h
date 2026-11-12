@@ -1,21 +1,30 @@
-// Copyright 2019 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2019-2024 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #ifndef ESP_HOSTAP_H
 #define ESP_HOSTAP_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include "sdkconfig.h"
+#ifdef CONFIG_ESP_WIFI_SOFTAP_SUPPORT
 void *hostap_init(void);
 bool hostap_deinit(void *data);
+u16 esp_send_assoc_resp(struct hostapd_data *data, const u8 *addr,
+                        u16 status_code, bool omit_rsnxe, int subtype);
+int esp_send_sae_auth_reply(struct hostapd_data *hapd,
+                            const u8 *dst, const u8 *bssid,
+                            u16 auth_alg, u16 auth_transaction, u16 resp,
+                            const u8 *ies, size_t ies_len);
+#endif
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* ESP_HOSTAP_H */

@@ -1,16 +1,8 @@
-// Copyright 2017-2019 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2017-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 /** @file
  *  @brief Bluetooth Mesh Sensor Client Model APIs.
@@ -149,7 +141,7 @@ typedef struct {
 } esp_ble_mesh_sensor_settings_status_cb_t;
 
 /** Parameters of Sensor Setting Status */
-typedef struct  {
+typedef struct {
     bool     op_en;                        /*!< Indicate id optional parameters are included */
     uint16_t sensor_property_id;           /*!< Property ID identifying a sensor */
     uint16_t sensor_setting_property_id;   /*!< Setting ID identifying a setting within a sensor */

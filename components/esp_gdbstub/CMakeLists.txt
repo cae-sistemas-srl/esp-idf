@@ -1,20 +1,45 @@
 idf_build_get_property(target IDF_TARGET)
 
-idf_component_register(SRCS "src/gdbstub.c" "src/packet.c"
-                       INCLUDE_DIRS "include"
-                       PRIV_INCLUDE_DIRS "private_include"
-                       LDFRAGMENTS "linker.lf"
-                       REQUIRES "freertos"
-                       PRIV_REQUIRES "soc" "esp_rom")
+if(${target} STREQUAL "linux")
+    return() # This component is not supported by the POSIX/Linux simulator
+endif()
+
+set(srcs "src/gdbstub.c"
+         "src/gdbstub_transport.c"
+         "src/packet.c")
+
+set(includes "include")
+set(priv_includes "private_include")
 
 if(CONFIG_IDF_TARGET_ARCH_XTENSA)
-    target_include_directories(${COMPONENT_LIB} PUBLIC "xtensa" "${target}")
-    target_sources(${COMPONENT_LIB} PRIVATE "xtensa/gdbstub_xtensa.c"
-                                            "xtensa/gdbstub-entry.S"
-                                            "esp_common/gdbstub_common.c")
-
+    list(APPEND srcs "src/port/xtensa/gdbstub_xtensa.c"
+                     "src/port/xtensa/gdbstub-entry.S"
+                     "src/port/xtensa/xt_debugexception.S")
+    list(APPEND priv_includes "src/port/xtensa/include")
 elseif(CONFIG_IDF_TARGET_ARCH_RISCV)
-    target_include_directories(${COMPONENT_LIB} PUBLIC "riscv" "${target}")
-    target_sources(${COMPONENT_LIB} PRIVATE "riscv/gdbstub_riscv.c"
-    "${target}/gdbstub_${target}.c")
+    list(APPEND srcs "src/port/riscv/gdbstub_riscv.c"
+                     "src/port/riscv/rv_decode.c"
+                     "src/port/riscv/target_xml.c")
+    list(APPEND priv_includes "src/port/riscv/include")
+endif()
+
+idf_component_register(SRCS ${srcs}
+                       INCLUDE_DIRS ${includes}
+                       PRIV_INCLUDE_DIRS ${priv_includes}
+                       LDFRAGMENTS "linker.lf"
+                       REQUIRES "freertos"
+                       PRIV_REQUIRES esp_hal_wdt esp_hal_uart esp_system)
+
+if(CONFIG_ESP_SYSTEM_PANIC_GDBSTUB)
+    # Make sure the panic event registration in gdbstub.c is considered by the linker
+    target_link_libraries(${COMPONENT_LIB} INTERFACE "-u esp_gdbstub_panic_handler")
+endif()
+
+if(CONFIG_ESP_SYSTEM_GDBSTUB_RUNTIME)
+    # Pull in the PRE_SCHEDULER registration from gdbstub.c.
+    target_link_libraries(${COMPONENT_LIB} INTERFACE "-u esp_gdbstub_init")
+    if(CONFIG_IDF_TARGET_ARCH_XTENSA)
+        # Pull in the Xtensa debug exception handler from its separate object file.
+        target_link_libraries(${COMPONENT_LIB} INTERFACE "-u _xt_panic_gdbstub")
+    endif()
 endif()

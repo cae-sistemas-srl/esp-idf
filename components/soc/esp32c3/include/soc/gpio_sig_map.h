@@ -1,16 +1,8 @@
-// Copyright 2020 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0 OR MIT
+ */
 #ifndef _SOC_GPIO_SIG_MAP_H_
 #define _SOC_GPIO_SIG_MAP_H_
 
@@ -53,26 +45,26 @@
 #define GPIO_WLAN_PRIO_IDX            18
 #define GPIO_BT_ACTIVE_IDX            19
 #define GPIO_WLAN_ACTIVE_IDX          19
-#define BB_DIAG0_IDX                  20
-#define BB_DIAG1_IDX                  21
-#define BB_DIAG2_IDX                  22
-#define BB_DIAG3_IDX                  23
-#define BB_DIAG4_IDX                  24
-#define BB_DIAG5_IDX                  25
-#define BB_DIAG6_IDX                  26
-#define BB_DIAG7_IDX                  27
-#define BB_DIAG8_IDX                  28
-#define BB_DIAG9_IDX                  29
-#define BB_DIAG10_IDX                 30
-#define BB_DIAG11_IDX                 31
-#define BB_DIAG12_IDX                 32
-#define BB_DIAG13_IDX                 33
-#define BB_DIAG14_IDX                 34
-#define BB_DIAG15_IDX                 35
-#define BB_DIAG16_IDX                 36
-#define BB_DIAG17_IDX                 37
-#define BB_DIAG18_IDX                 38
-#define BB_DIAG19_IDX                 39
+#define CPU_GPIO_IN0_IDX              28
+#define CPU_GPIO_OUT0_IDX             28
+#define CPU_GPIO_IN1_IDX              29
+#define CPU_GPIO_OUT1_IDX             29
+#define CPU_GPIO_IN2_IDX              30
+#define CPU_GPIO_OUT2_IDX             30
+#define CPU_GPIO_IN3_IDX              31
+#define CPU_GPIO_OUT3_IDX             31
+#define CPU_GPIO_IN4_IDX              32
+#define CPU_GPIO_OUT4_IDX             32
+#define CPU_GPIO_IN5_IDX              33
+#define CPU_GPIO_OUT5_IDX             33
+#define CPU_GPIO_IN6_IDX              34
+#define CPU_GPIO_OUT6_IDX             34
+#define CPU_GPIO_IN7_IDX              35
+#define CPU_GPIO_OUT7_IDX             35
+#define USB_JTAG_TCK_OUT_IDX          36
+#define USB_JTAG_TMS_OUT_IDX          37
+#define USB_JTAG_TDI_OUT_IDX          38
+#define USB_JTAG_TDO_OUT_IDX          39
 #define USB_EXTPHY_VP_IDX             40
 #define USB_EXTPHY_OEN_IDX            40
 #define USB_EXTPHY_VM_IDX             41
@@ -100,6 +92,7 @@
 #define GPIO_SD1_OUT_IDX              56
 #define GPIO_SD2_OUT_IDX              57
 #define GPIO_SD3_OUT_IDX              58
+#define I2SO_SD1_OUT_IDX              59        // Only used in I2S PDM TX mode
 #define FSPICLK_IN_IDX                63
 #define FSPICLK_OUT_IDX               63
 #define FSPIQ_IN_IDX                  64
@@ -179,6 +172,7 @@
 #define CLK_OUT_OUT2_IDX              124
 #define CLK_OUT_OUT3_IDX              125
 #define SPICS1_OUT_IDX                126
+#define USB_JTAG_TRST_OUT_IDX         127
 #define SIG_GPIO_OUT_IDX              128
 #define GPIO_MAP_DATE_IDX             0x2006130
 #endif  /* _SOC_GPIO_SIG_MAP_H_ */

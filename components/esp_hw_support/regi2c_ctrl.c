@@ -1,42 +1,68 @@
 /*
- * SPDX-FileCopyrightText: 2020-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "regi2c_ctrl.h"
+
+#include "esp_attr.h"
 #include <stdint.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "hal/regi2c_ctrl.h"
+#include "esp_private/critical_section.h"
 
-static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+// This lock is used to protect the analog i2c bus from being used concurrently
+DEFINE_CRIT_SECTION_LOCK_STATIC(mux);
 
-uint8_t IRAM_ATTR regi2c_ctrl_read_reg(uint8_t block, uint8_t host_id, uint8_t reg_add)
+uint8_t regi2c_ctrl_read_reg(uint8_t block, uint8_t host_id, uint8_t reg_add)
 {
-    portENTER_CRITICAL_ISR(&mux);
-    uint8_t value = i2c_read_reg_raw(block, host_id, reg_add);
-    portEXIT_CRITICAL_ISR(&mux);
+    REGI2C_CLOCK_ENABLE();
+    int __DECLARE_REGI2C_ATOMIC_ENV __attribute__((unused));
+    esp_os_enter_critical_safe(&mux);
+    uint8_t value = regi2c_impl_read(block, host_id, reg_add);
+    esp_os_exit_critical_safe(&mux);
+    REGI2C_CLOCK_DISABLE();
     return value;
 }
 
-uint8_t IRAM_ATTR regi2c_ctrl_read_reg_mask(uint8_t block, uint8_t host_id, uint8_t reg_add, uint8_t msb, uint8_t lsb)
+uint8_t regi2c_ctrl_read_reg_mask(uint8_t block, uint8_t host_id, uint8_t reg_add, uint8_t msb, uint8_t lsb)
 {
-    portENTER_CRITICAL_ISR(&mux);
-    uint8_t value = i2c_read_reg_mask_raw(block, host_id, reg_add, msb, lsb);
-    portEXIT_CRITICAL_ISR(&mux);
+    REGI2C_CLOCK_ENABLE();
+    int __DECLARE_REGI2C_ATOMIC_ENV __attribute__((unused));
+    esp_os_enter_critical_safe(&mux);
+    uint8_t value = regi2c_impl_read_mask(block, host_id, reg_add, msb, lsb);
+    esp_os_exit_critical_safe(&mux);
+    REGI2C_CLOCK_DISABLE();
     return value;
 }
 
-void IRAM_ATTR regi2c_ctrl_write_reg(uint8_t block, uint8_t host_id, uint8_t reg_add, uint8_t data)
+void regi2c_ctrl_write_reg(uint8_t block, uint8_t host_id, uint8_t reg_add, uint8_t data)
 {
-    portENTER_CRITICAL_ISR(&mux);
-    i2c_write_reg_raw(block, host_id, reg_add, data);
-    portEXIT_CRITICAL_ISR(&mux);
+    REGI2C_CLOCK_ENABLE();
+    int __DECLARE_REGI2C_ATOMIC_ENV __attribute__((unused));
+    esp_os_enter_critical_safe(&mux);
+    regi2c_impl_write(block, host_id, reg_add, data);
+    esp_os_exit_critical_safe(&mux);
+    REGI2C_CLOCK_DISABLE();
 }
 
-void IRAM_ATTR regi2c_ctrl_write_reg_mask(uint8_t block, uint8_t host_id, uint8_t reg_add, uint8_t msb, uint8_t lsb, uint8_t data)
+void regi2c_ctrl_write_reg_mask(uint8_t block, uint8_t host_id, uint8_t reg_add, uint8_t msb, uint8_t lsb, uint8_t data)
 {
-    portENTER_CRITICAL_ISR(&mux);
-    i2c_write_reg_mask_raw(block, host_id, reg_add, msb, lsb, data);
-    portEXIT_CRITICAL_ISR(&mux);
+    REGI2C_CLOCK_ENABLE();
+    int __DECLARE_REGI2C_ATOMIC_ENV __attribute__((unused));
+    esp_os_enter_critical_safe(&mux);
+    regi2c_impl_write_mask(block, host_id, reg_add, msb, lsb, data);
+    esp_os_exit_critical_safe(&mux);
+    REGI2C_CLOCK_DISABLE();
+}
+
+void regi2c_enter_critical(void)
+{
+    esp_os_enter_critical_safe(&mux);
+}
+
+void regi2c_exit_critical(void)
+{
+    esp_os_exit_critical_safe(&mux);
 }

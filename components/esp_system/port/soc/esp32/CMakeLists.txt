@@ -2,15 +2,12 @@ set(srcs "highint_hdl.S"
          "clk.c"
          "reset_reason.c"
          "system_internal.c"
-         "cache_err_int.c"
-         "../../arch/xtensa/panic_arch.c"
-         "../../arch/xtensa/panic_handler_asm.S"
-         "../../arch/xtensa/expression_with_stack.c"
-         "../../arch/xtensa/expression_with_stack_asm.S"
-         "../../arch/xtensa/debug_helpers.c"
-         "../../arch/xtensa/debug_helpers_asm.S"
-         "../../arch/xtensa/trax.c"
-         )
+         "cache_err_int.c")
+
+if(CONFIG_ESP32_ECO3_CACHE_LOCK_FIX AND CONFIG_ESP_INT_WDT)
+    list(APPEND srcs "eco3_livelock_workaround.c")
+endif()
+
 add_prefix(srcs "${CMAKE_CURRENT_LIST_DIR}/" ${srcs})
 
 target_sources(${COMPONENT_LIB} PRIVATE ${srcs})

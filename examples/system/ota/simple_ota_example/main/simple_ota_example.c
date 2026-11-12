@@ -16,6 +16,9 @@
 #include "esp_https_ota.h"
 #include "protocol_examples_common.h"
 #include "string.h"
+#ifdef CONFIG_EXAMPLE_USE_CERT_BUNDLE
+#include "esp_crt_bundle.h"
+#endif
 
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -30,9 +33,11 @@
 #ifdef CONFIG_EXAMPLE_FIRMWARE_UPGRADE_BIND_IF
 /* The interface name value can refer to if_desc in esp_netif_defaults.h */
 #if CONFIG_EXAMPLE_FIRMWARE_UPGRADE_BIND_IF_ETH
-static const char *bind_interface_name = "eth";
+static const char *bind_interface_name = EXAMPLE_NETIF_DESC_ETH;
 #elif CONFIG_EXAMPLE_FIRMWARE_UPGRADE_BIND_IF_STA
-static const char *bind_interface_name = "sta";
+static const char *bind_interface_name = EXAMPLE_NETIF_DESC_STA;
+#elif CONFIG_EXAMPLE_FIRMWARE_UPGRADE_BIND_IF_THREAD
+static const char *bind_interface_name = EXAMPLE_NETIF_DESC_THREAD;
 #endif
 #endif
 
@@ -57,6 +62,9 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
     case HTTP_EVENT_ON_HEADER:
         ESP_LOGD(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key, evt->header_value);
         break;
+    case HTTP_EVENT_ON_HEADERS_COMPLETE:
+        ESP_LOGD(TAG, "HTTP_EVENT_ON_HEADERS_COMPLETE");
+        break;
     case HTTP_EVENT_ON_DATA:
         ESP_LOGD(TAG, "HTTP_EVENT_ON_DATA, len=%d", evt->data_len);
         break;
@@ -66,13 +74,18 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
     case HTTP_EVENT_DISCONNECTED:
         ESP_LOGD(TAG, "HTTP_EVENT_DISCONNECTED");
         break;
+    case HTTP_EVENT_REDIRECT:
+        ESP_LOGD(TAG, "HTTP_EVENT_REDIRECT");
+        break;
+    default:
+        break;
     }
     return ESP_OK;
 }
 
 void simple_ota_example_task(void *pvParameter)
 {
-    ESP_LOGI(TAG, "Starting OTA example");
+    ESP_LOGI(TAG, "Starting OTA example task");
 #ifdef CONFIG_EXAMPLE_FIRMWARE_UPGRADE_BIND_IF
     esp_netif_t *netif = get_example_netif_from_desc(bind_interface_name);
     if (netif == NULL) {
@@ -85,12 +98,22 @@ void simple_ota_example_task(void *pvParameter)
 #endif
     esp_http_client_config_t config = {
         .url = CONFIG_EXAMPLE_FIRMWARE_UPGRADE_URL,
+#ifdef CONFIG_EXAMPLE_USE_CERT_BUNDLE
+        .crt_bundle_attach = esp_crt_bundle_attach,
+#else
         .cert_pem = (char *)server_cert_pem_start,
+#endif /* CONFIG_EXAMPLE_USE_CERT_BUNDLE */
         .event_handler = _http_event_handler,
         .keep_alive_enable = true,
 #ifdef CONFIG_EXAMPLE_FIRMWARE_UPGRADE_BIND_IF
         .if_name = &ifr,
 #endif
+#if CONFIG_EXAMPLE_TLS_DYN_BUF_RX_STATIC
+        /* This part applies static buffer strategy for rx dynamic buffer.
+         * This is to avoid frequent allocation and deallocation of dynamic buffer.
+         */
+        .tls_dyn_buf_strategy = HTTP_TLS_DYN_BUF_RX_STATIC,
+#endif /* CONFIG_EXAMPLE_TLS_DYN_BUF_RX_STATIC */
     };
 
 #ifdef CONFIG_EXAMPLE_FIRMWARE_UPGRADE_URL_FROM_STDIN
@@ -111,8 +134,13 @@ void simple_ota_example_task(void *pvParameter)
     config.skip_cert_common_name_check = true;
 #endif
 
-    esp_err_t ret = esp_https_ota(&config);
+    esp_https_ota_config_t ota_config = {
+        .http_config = &config,
+    };
+    ESP_LOGI(TAG, "Attempting to download update from %s", config.url);
+    esp_err_t ret = esp_https_ota(&ota_config);
     if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "OTA Succeed, Rebooting...");
         esp_restart();
     } else {
         ESP_LOGE(TAG, "Firmware upgrade failed");
@@ -151,6 +179,7 @@ static void get_sha256_of_partitions(void)
 
 void app_main(void)
 {
+    ESP_LOGI(TAG, "OTA example app_main start");
     // Initialize NVS.
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {

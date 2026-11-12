@@ -3,7 +3,7 @@
 
 # Simple log test on Linux target
 
-This unit test tests basic functionality of the log component. The test does not use mocks. Instead, it runs the whole implementation of the component on the Linux host. The test framework is CATCH. For early log, we only perform a compile time test since there's nothing to test on Linux except for the log macros themselves (all the implementation will be in chip ROM).
+These Catch2 tests run the log component on Linux with a FreeRTOS mock. They cover text formatting and message handlers in V1 and V2, including binary messages, wrapper chains, recursion, and concurrent replacement. Early and DRAM calls, and constrained calls in V2, are checked for bypassing the handler; their target-specific output is not validated on Linux.
 
 ## Requirements
 
@@ -19,10 +19,8 @@ First, make sure that the target is set to Linux. Run `idf.py --preview set-targ
 
 ## Run
 
-IDF monitor doesn't work yet for Linux. You have to run the app manually: 
-
 ```bash
-./build/test_log_host.elf
+idf.py monitor
 ```
 
 ## Example Output
@@ -30,7 +28,15 @@ IDF monitor doesn't work yet for Linux. You have to run the app manually:
 Ideally, all tests pass, which is indicated by "All tests passed" in the last line:
 
 ```bash
-$ ./build/test_log_host.elf 
+$ idf.py monitor
 ===============================================================================
 All tests passed (8 assertions in 6 test cases)
 ```
+
+To run only the message handler tests after building:
+
+```bash
+./build/test_log_host.elf "[handler]"
+```
+
+`pytest_log_linux.py` runs these tests with the existing log configurations, including V1, V2, binary output, and different timestamp and tag-level settings.

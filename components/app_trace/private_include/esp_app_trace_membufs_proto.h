@@ -1,16 +1,9 @@
-// Copyright 2020 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #ifndef ESP_APP_TRACE_MEMBUFS_PROTO_H_
 #define ESP_APP_TRACE_MEMBUFS_PROTO_H_
 
@@ -36,7 +29,7 @@ typedef struct {
 
 typedef struct {
     esp_err_t (*swap_start)(uint32_t curr_block_id);
-    esp_err_t (*swap)(uint32_t new_block_id);
+    esp_err_t (*swap)(uint32_t new_block_id, uint32_t prev_block_len);
     esp_err_t (*swap_end)(uint32_t new_block_id, uint32_t prev_block_len);
     bool (*host_data_pending)(void);
 } esp_apptrace_membufs_proto_hw_t;
@@ -45,14 +38,9 @@ typedef struct {
     esp_apptrace_membufs_proto_hw_t *       hw;
     volatile esp_apptrace_membufs_state_t   state;       // state
     esp_apptrace_mem_block_t                blocks[2];   // memory blocks
-#if CONFIG_APPTRACE_PENDING_DATA_SIZE_MAX > 0
-    // ring buffer control struct for pending user blocks
-    esp_apptrace_rb_t                   rb_pend;
-    // storage for pending user blocks
-    uint8_t                             pending_data[CONFIG_APPTRACE_PENDING_DATA_SIZE_MAX + 1];
-#endif
     // ring buffer control struct for data from host (down buffer)
     esp_apptrace_rb_t                       rb_down;
+    int                                     header_size; ///< Size of the trace header (2 or 4 bytes)
 } esp_apptrace_membufs_proto_data_t;
 
 esp_err_t esp_apptrace_membufs_init(esp_apptrace_membufs_proto_data_t *proto, const esp_apptrace_mem_block_t blocks_cfg[2]);

@@ -6,22 +6,43 @@ entries:
 entries:
     .rtc.coredump+
 
+[sections:rtc_noinit_coredump]
+entries:
+    .rtc_noinit.coredump+
+
 [sections:dram_coredump]
 entries:
-    .dram1.coredump+
+    .dram2.coredump+
 
-if IDF_TARGET_ESP32S2 = n:
-    [sections:iram_coredump]
-    entries:
-        .iram.data.coredump+
+# Always include .iram2.coredump section in the final linker script file,
+# even though it may be empty. The coredump component will ignore empty
+# sections when generating the ELF dump.
+[sections:iram_coredump]
+entries:
+    .iram2.coredump+
+
+[sections:noinit_coredump]
+entries:
+    .noinit.coredump+
+
+[sections:extram_coredump]
+entries:
+    .ext_ram.coredump+
+
+[sections:extram_noinit_coredump]
+entries:
+    .ext_ram_noinit.coredump+
 
 [scheme:coredump_default]
 entries:
     dram_coredump -> dram0_data
     rtc_coredump -> rtc_data
     rtc_fast_coredump -> rtc_force_fast
-    if IDF_TARGET_ESP32S2 = n:
-        iram_coredump -> iram0_data
+    rtc_noinit_coredump -> rtc_noinit
+    noinit_coredump -> noinit
+    iram_coredump -> iram0_data
+    extram_coredump -> extern_ram
+    extram_noinit_coredump -> extram_noinit
 
 [mapping:coredump_default]
 archive: *
@@ -29,22 +50,42 @@ entries:
     * (coredump_default);
         rtc_fast_coredump -> rtc_force_fast SURROUND(coredump_rtc_fast),
         rtc_coredump -> rtc_data SURROUND(coredump_rtc),
-        dram_coredump -> dram0_data SURROUND(coredump_dram)
-    if IDF_TARGET_ESP32S2 = n:
-        * (coredump_default);
-            iram_coredump -> iram0_data SURROUND(coredump_iram)
+        rtc_noinit_coredump -> rtc_noinit SURROUND(coredump_rtc_noinit),
+        noinit_coredump -> noinit SURROUND(coredump_noinit),
+        dram_coredump -> dram0_data SURROUND(coredump_dram),
+        iram_coredump -> iram0_data SURROUND(coredump_iram),
+        extram_coredump -> extern_ram SURROUND(coredump_extram),
+        extram_noinit_coredump -> extram_noinit SURROUND(coredump_extram_noinit)
 
 [mapping:espcoredump]
 archive: libespcoredump.a
 entries:
     if ESP_PANIC_HANDLER_IRAM = y:
-        core_dump_uart (noflash_text)
-        core_dump_flash (noflash_text)
-        core_dump_common (noflash_text)
-        core_dump_port (noflash_text)
-        core_dump_elf (noflash_text)
+        core_dump_uart (noflash)
+        core_dump_flash (noflash)
+        core_dump_common (noflash)
+        core_dump_port (noflash)
+        core_dump_elf (noflash)
+        core_dump_uptime (noflash)
+        # ESP32 uses mbedtls for the sha and mbedtls is in the flash
+        if IDF_TARGET_ESP32 = n:
+            core_dump_sha (noflash)
     else:
         * (default)
+
+[sections:esp_coredump_extra]
+entries:
+    .esp_coredump_extra+
+
+[scheme:esp_coredump_extra_default]
+entries:
+    esp_coredump_extra -> dram0_data
+
+[mapping:esp_coredump_extra]
+archive: *
+entries:
+    * (esp_coredump_extra_default);
+        esp_coredump_extra -> dram0_data KEEP() SORT(name) ALIGN(4, pre) SURROUND(esp_coredump_extra_array)
 
 [mapping:spi_flash_override]
 archive: libspi_flash.a

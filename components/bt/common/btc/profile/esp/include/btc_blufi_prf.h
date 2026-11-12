@@ -1,16 +1,8 @@
-// Copyright 2015-2016 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #ifndef __BTC_BLUFI_PRF_H__
 #define __BTC_BLUFI_PRF_H__
@@ -29,11 +21,16 @@
 #define ESP_BLUFI_SUCCESS 0x00
 #endif
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define BT_BD_ADDR_STR         "%02x:%02x:%02x:%02x:%02x:%02x"
 #define BT_BD_ADDR_HEX(addr)   addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]
 
 #define GATT_UUID_CHAR_CLIENT_CONFIG    0x2902      /*  Client Characteristic Configuration */
-//define the blufi serivce uuid
+//define the blufi service uuid
 #define BLUFI_SERVICE_UUID  0xFFFF
 //define the blufi Char uuid (PHONE to ESP32)
 #define BLUFI_CHAR_P2E_UUID 0xFF01
@@ -101,6 +98,7 @@ void btc_blufi_cb_handler(btc_msg_t *msg);
 void btc_blufi_call_handler(btc_msg_t *msg);
 void btc_blufi_set_callbacks(esp_blufi_callbacks_t *callbacks);
 
+void btc_blufi_report_error(esp_blufi_error_state_t state);
 void btc_blufi_recv_handler(uint8_t *data, int len);
 void btc_blufi_send_notify(uint8_t *pkt, int pkt_len);
 void btc_blufi_call_deep_copy(btc_msg_t *msg, void *p_dest, void *p_src);
@@ -108,4 +106,7 @@ void btc_blufi_call_deep_free(btc_msg_t *msg);
 
 uint16_t btc_blufi_get_version(void);
 
+#ifdef __cplusplus
+}
+#endif
 #endif /* __BTC_BLUFI_PRF_H__ */

@@ -2,19 +2,8 @@
 #
 # Utility script for ESP-IDF developers to work with the CODEOWNERS file.
 #
-# Copyright 2020 Espressif Systems (Shanghai) PTE LTD
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-FileCopyrightText: 2020-2021 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 
 import argparse
 import os
@@ -28,7 +17,7 @@ CODEOWNERS_PATH = os.path.join(IDF_PATH, '.gitlab', 'CODEOWNERS')
 CODEOWNER_GROUP_PREFIX = '@esp-idf-codeowners/'
 
 
-def get_all_files():
+def get_all_files() -> list[str]:
     """
     Get list of all file paths in the repository.
     """
@@ -36,7 +25,7 @@ def get_all_files():
     return subprocess.check_output(['git', 'ls-files'], cwd=IDF_PATH).decode('utf-8').strip().split('\n')
 
 
-def pattern_to_regex(pattern):
+def pattern_to_regex(pattern: str) -> str:
     """
     Convert the CODEOWNERS path pattern into a regular expression string.
     """
@@ -50,34 +39,36 @@ def pattern_to_regex(pattern):
 
     # Convert the glob pattern into a regular expression:
     # first into intermediate tokens
-    pattern = (pattern.replace('**/', ':REGLOB:')
-                      .replace('**', ':INVALID:')
-                      .replace('*', ':GLOB:')
-                      .replace('.', ':DOT:')
-                      .replace('?', ':ANY:'))
+    pattern = (
+        pattern.replace('**/', ':REGLOB:')
+        .replace('**', ':INVALID:')
+        .replace('*', ':GLOB:')
+        .replace('.', ':DOT:')
+        .replace('?', ':ANY:')
+    )
 
     if pattern.find(':INVALID:') >= 0:
-        raise ValueError("Likely invalid pattern '{}': '**' should be followed by '/'".format(orig_pattern))
+        raise ValueError(f"Likely invalid pattern '{orig_pattern}': '**' should be followed by '/'")
 
     # then into the final regex pattern:
-    re_pattern = (pattern.replace(':REGLOB:', '(?:.*/)?')
-                         .replace(':GLOB:', '[^/]*')
-                         .replace(':DOT:', '[.]')
-                         .replace(':ANY:', '.') + '$')
+    re_pattern = (
+        pattern.replace(':REGLOB:', '(?:.*/)?').replace(':GLOB:', '[^/]*').replace(':DOT:', '[.]').replace(':ANY:', '.')
+        + '$'
+    )
     if re_pattern.startswith('/'):
         re_pattern = '^' + re_pattern
 
     return re_pattern
 
 
-def files_by_regex(all_files, regex):
+def files_by_regex(all_files: list, regex: re.Pattern) -> list:
     """
-    Return all files in the repository matching the given regular expresion.
+    Return all files in the repository matching the given regular expression.
     """
     return [file for file in all_files if regex.search('/' + file)]
 
 
-def files_by_pattern(all_files, pattern=None):
+def files_by_pattern(all_files: list, pattern: str | None = None) -> list:
     """
     Return all the files in the repository matching the given CODEOWNERS pattern.
     """
@@ -87,7 +78,7 @@ def files_by_pattern(all_files, pattern=None):
     return files_by_regex(all_files, re.compile(pattern_to_regex(pattern)))
 
 
-def action_identify(args):
+def action_identify(args: argparse.Namespace) -> None:
     best_match = []
     all_files = get_all_files()
     with open(CODEOWNERS_PATH) as f:
@@ -105,7 +96,7 @@ def action_identify(args):
         print(owner)
 
 
-def action_test_pattern(args):
+def action_test_pattern(args: argparse.Namespace) -> None:
     re_pattern = pattern_to_regex(args.pattern)
 
     if args.regex:
@@ -117,11 +108,11 @@ def action_test_pattern(args):
         print(f)
 
 
-def action_ci_check(args):
+def action_ci_check(args: argparse.Namespace) -> None:
     errors = []
 
-    def add_error(msg):
-        errors.append('{}:{}: {}'.format(CODEOWNERS_PATH, line_no, msg))
+    def add_error(msg: str) -> None:
+        errors.append(f'{CODEOWNERS_PATH}:{line_no}: {msg}')
 
     all_files = get_all_files()
     prev_path_pattern = ''
@@ -132,7 +123,12 @@ def action_ci_check(args):
             if line.startswith('# sort-order-reset'):
                 prev_path_pattern = ''
 
-            if not line or line.startswith('#'):
+            if (
+                not line
+                or line.startswith('#')  # comment
+                or line.startswith('[')  # file group
+                or line.startswith('^[')
+            ):  # optional file group
                 continue
 
             # Each line has a form of "<path> <owners>+"
@@ -140,22 +136,22 @@ def action_ci_check(args):
             path_pattern = tokens[0]
             owners = tokens[1:]
             if not owners:
-                add_error('no owners specified for {}'.format(path_pattern))
+                add_error(f'no owners specified for {path_pattern}')
 
             # Check that the file is sorted by path patterns
             if not in_order(prev_path_pattern, path_pattern):
-                add_error('file is not sorted: {} < {}'.format(path_pattern, prev_path_pattern))
+                add_error(f'file is not sorted: {path_pattern} < {prev_path_pattern}')
             prev_path_pattern = path_pattern
 
             # Check that the pattern matches at least one file
             files = files_by_pattern(all_files, path_pattern)
             if not files:
-                add_error('no files matched by pattern {}'.format(path_pattern))
+                add_error(f'no files matched by pattern {path_pattern}')
 
             for o in owners:
                 # Sanity-check the owner group name
                 if not o.startswith(CODEOWNER_GROUP_PREFIX):
-                    add_error("owner {} doesn't start with {}".format(o, CODEOWNER_GROUP_PREFIX))
+                    add_error(f"owner {o} doesn't start with {CODEOWNER_GROUP_PREFIX}")
 
     if not errors:
         print('No errors found.')
@@ -166,7 +162,7 @@ def action_ci_check(args):
         raise SystemExit(1)
 
 
-def in_order(prev, current):
+def in_order(prev: str, current: str) -> bool:
     """
     Return True if the ordering is correct for these two lines ('prev' should be before 'current').
 
@@ -180,14 +176,14 @@ def in_order(prev, current):
     if not prev:
         return True  # first element in file
 
-    def is_separator(c):
+    def is_separator(c: str) -> bool:
         return c in '-_/'  # ignore differences between separators for ordering purposes
 
-    def is_wildcard(c):
+    def is_wildcard(c: str) -> bool:
         return c in '?*'
 
     # looping until we see a different character
-    for a,b in zip(prev, current):
+    for a, b in zip(prev, current):
         if is_separator(a) and is_separator(b):
             continue
         if is_wildcard(a) or is_wildcard(b):
@@ -200,7 +196,7 @@ def in_order(prev, current):
     return len(current) >= len(prev)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         sys.argv[0], description='Internal helper script for working with the CODEOWNERS file.'
     )
@@ -221,9 +217,11 @@ def main():
 
     test_pattern = subparsers.add_parser(
         'test-pattern',
-        help='Print files in the repository for a given CODEOWNERS pattern. Useful when adding new rules.'
+        help='Print files in the repository for a given CODEOWNERS pattern. Useful when adding new rules.',
     )
-    test_pattern.add_argument('--regex', action='store_true', help='Print the equivalent regular expression instead of the file list.')
+    test_pattern.add_argument(
+        '--regex', action='store_true', help='Print the equivalent regular expression instead of the file list.'
+    )
     test_pattern.add_argument('pattern', help='Path pattern to get the list of files for')
 
     args = parser.parse_args()

@@ -96,6 +96,7 @@ enum {
     BTA_AV_DELAY_CO,
     BTA_AV_OPEN_AT_INC,
     BTA_AV_OPEN_FAIL_SDP,
+    BTA_AV_SET_DELAY_VALUE,
     BTA_AV_NUM_SACTIONS
 };
 
@@ -115,6 +116,7 @@ static const UINT8 bta_av_sst_init[][BTA_AV_NUM_COLS] = {
     /* AP_CLOSE_EVT */          {BTA_AV_CLEANUP,        BTA_AV_SIGNORE,        BTA_AV_INIT_SST },
     /* AP_START_EVT */          {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_INIT_SST },
     /* AP_STOP_EVT */           {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_INIT_SST },
+    /* AP_SET_DELAY_VALUE_EVT */{BTA_AV_SET_DELAY_VALUE,BTA_AV_SIGNORE,        BTA_AV_INIT_SST },
     /* API_RECONFIG_EVT */      {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_INIT_SST },
     /* API_PROTECT_REQ_EVT */   {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_INIT_SST },
     /* API_PROTECT_RSP_EVT */   {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_INIT_SST },
@@ -154,6 +156,7 @@ static const UINT8 bta_av_sst_incoming[][BTA_AV_NUM_COLS] = {
     /* AP_CLOSE_EVT */          {BTA_AV_CCO_CLOSE,      BTA_AV_DISCONNECT_REQ, BTA_AV_CLOSING_SST },
     /* AP_START_EVT */          {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_INCOMING_SST },
     /* AP_STOP_EVT */           {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_INCOMING_SST },
+    /* AP_SET_DELAY_VALUE_EVT */{BTA_AV_SET_DELAY_VALUE,BTA_AV_SIGNORE,        BTA_AV_INCOMING_SST },
     /* API_RECONFIG_EVT */      {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_INCOMING_SST },
     /* API_PROTECT_REQ_EVT */   {BTA_AV_SECURITY_REQ,   BTA_AV_SIGNORE,        BTA_AV_INCOMING_SST },
     /* API_PROTECT_RSP_EVT */   {BTA_AV_SECURITY_RSP,   BTA_AV_SIGNORE,        BTA_AV_INCOMING_SST },
@@ -193,6 +196,7 @@ static const UINT8 bta_av_sst_opening[][BTA_AV_NUM_COLS] = {
     /* AP_CLOSE_EVT */          {BTA_AV_DO_CLOSE,       BTA_AV_SIGNORE,        BTA_AV_CLOSING_SST },
     /* AP_START_EVT */          {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_OPENING_SST },
     /* AP_STOP_EVT */           {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_OPENING_SST },
+    /* AP_SET_DELAY_VALUE_EVT */{BTA_AV_SET_DELAY_VALUE,BTA_AV_SIGNORE,        BTA_AV_OPENING_SST },
     /* API_RECONFIG_EVT */      {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_OPENING_SST },
     /* API_PROTECT_REQ_EVT */   {BTA_AV_SECURITY_REQ,   BTA_AV_SIGNORE,        BTA_AV_OPENING_SST },
     /* API_PROTECT_RSP_EVT */   {BTA_AV_SECURITY_RSP,   BTA_AV_SIGNORE,        BTA_AV_OPENING_SST },
@@ -232,6 +236,7 @@ static const UINT8 bta_av_sst_open[][BTA_AV_NUM_COLS] = {
     /* AP_CLOSE_EVT */          {BTA_AV_DO_CLOSE,       BTA_AV_SIGNORE,        BTA_AV_CLOSING_SST },
     /* AP_START_EVT */          {BTA_AV_DO_START,       BTA_AV_SIGNORE,        BTA_AV_OPEN_SST },
     /* AP_STOP_EVT */           {BTA_AV_STR_STOPPED,    BTA_AV_SIGNORE,        BTA_AV_OPEN_SST },
+    /* AP_SET_DELAY_VALUE_EVT */{BTA_AV_SET_DELAY_VALUE,BTA_AV_SIGNORE,        BTA_AV_OPEN_SST },
     /* API_RECONFIG_EVT */      {BTA_AV_RECONFIG,       BTA_AV_SIGNORE,        BTA_AV_RCFG_SST },
     /* API_PROTECT_REQ_EVT */   {BTA_AV_SECURITY_REQ,   BTA_AV_SIGNORE,        BTA_AV_OPEN_SST },
     /* API_PROTECT_RSP_EVT */   {BTA_AV_SECURITY_RSP,   BTA_AV_SIGNORE,        BTA_AV_OPEN_SST },
@@ -271,6 +276,7 @@ static const UINT8 bta_av_sst_rcfg[][BTA_AV_NUM_COLS] = {
     /* AP_CLOSE_EVT */          {BTA_AV_DISCONNECT_REQ, BTA_AV_SIGNORE,        BTA_AV_CLOSING_SST },
     /* AP_START_EVT */          {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_RCFG_SST },
     /* AP_STOP_EVT */           {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_RCFG_SST },
+    /* AP_SET_DELAY_VALUE_EVT */{BTA_AV_SET_DELAY_VALUE,BTA_AV_SIGNORE,        BTA_AV_RCFG_SST },
     /* API_RECONFIG_EVT */      {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_RCFG_SST },
     /* API_PROTECT_REQ_EVT */   {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_RCFG_SST },
     /* API_PROTECT_RSP_EVT */   {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_RCFG_SST },
@@ -310,6 +316,7 @@ static const UINT8 bta_av_sst_closing[][BTA_AV_NUM_COLS] = {
     /* AP_CLOSE_EVT */          {BTA_AV_DISCONNECT_REQ, BTA_AV_SIGNORE,        BTA_AV_CLOSING_SST },
     /* AP_START_EVT */          {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_CLOSING_SST },
     /* AP_STOP_EVT */           {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_CLOSING_SST },
+    /* AP_SET_DELAY_VALUE_EVT */{BTA_AV_SET_DELAY_VALUE,BTA_AV_SIGNORE,        BTA_AV_CLOSING_SST },
     /* API_RECONFIG_EVT */      {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_CLOSING_SST },
     /* API_PROTECT_REQ_EVT */   {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_CLOSING_SST },
     /* API_PROTECT_RSP_EVT */   {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_CLOSING_SST },
@@ -421,6 +428,11 @@ void bta_av_ssm_execute(tBTA_AV_SCB *p_scb, UINT16 event, tBTA_AV_DATA *p_data)
 
     APPL_TRACE_VERBOSE("AV Sevent(0x%x)=0x%x(%s) state=%d(%s)",
                        p_scb->hndl, event, bta_av_evt_code(event), p_scb->state, bta_av_sst_code(p_scb->state));
+
+    if (p_scb->state >= (sizeof(bta_av_sst_tbl) / sizeof(bta_av_sst_tbl[0])) ||
+        event < BTA_AV_FIRST_SSM_EVT || event > BTA_AV_LAST_SSM_EVT) {
+        return;
+    }
 
     /* look up the state table for the current state */
     state_table = bta_av_sst_tbl[p_scb->state];

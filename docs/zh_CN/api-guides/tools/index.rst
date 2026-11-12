@@ -4,7 +4,14 @@
 .. toctree::
    :maxdepth: 1
 
-   IDF Tools <idf-tools>
-   IDF 监视器 <idf-monitor>
-   IDF Docker image <idf-docker-image>
-   IDF Windows Installer <idf-windows-installer>
+   idf-py
+   idf-monitor
+   idf-docker-image
+   idf-component-manager
+   idf-clang-tidy
+   idf-tools
+   idf-size
+   idf-sbom
+   idf-diag
+   idf-build-file
+   :TARGET_SUPPORT_QEMU: qemu

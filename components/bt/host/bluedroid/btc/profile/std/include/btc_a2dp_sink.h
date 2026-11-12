@@ -1,16 +1,8 @@
-// Copyright 2015-2016 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 /*******************************************************************************
  *
@@ -119,7 +111,7 @@ void btc_a2dp_sink_on_suspended(tBTA_AV_SUSPEND *p_av);
  **
  ** Function         btc_a2dp_sink_set_rx_flush
  **
- ** Description      enable/disabel discarding of received A2DP frames
+ ** Description      enable/disable discarding of received A2DP frames
  **
  *******************************************************************************/
 void btc_a2dp_sink_set_rx_flush(BOOLEAN enable);
@@ -133,6 +125,28 @@ void btc_a2dp_sink_set_rx_flush(BOOLEAN enable);
  **
  *******************************************************************************/
 void btc_a2dp_sink_reset_decoder(UINT8 *p_av);
+
+#if (BTC_AV_EXT_CODEC == FALSE)
+/*******************************************************************************
+ **
+ ** Function         btc_a2dp_sink_audio_stats_reset
+ **
+ ** Description      Post a reset of the audio packet counters onto the media
+ **                  command path. Handled on the BTC task.
+ **
+ *******************************************************************************/
+void btc_a2dp_sink_audio_stats_reset(esp_a2d_conn_hdl_t conn_hdl);
+
+/*******************************************************************************
+ **
+ ** Function         btc_a2dp_sink_audio_stats_stop
+ **
+ ** Description      Post a stop of the audio packet counters onto the media
+ **                  command path. Handled on the BTC task.
+ **
+ *******************************************************************************/
+void btc_a2dp_sink_audio_stats_stop(esp_a2d_conn_hdl_t conn_hdl);
+#endif /* BTC_AV_EXT_CODEC == FALSE */
 
 #endif /* #if BTC_AV_SINK_INCLUDED */
 

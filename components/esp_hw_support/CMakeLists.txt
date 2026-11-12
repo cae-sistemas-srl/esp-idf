@@ -1,57 +1,186 @@
 idf_build_get_property(target IDF_TARGET)
+idf_build_get_property(non_os_build NON_OS_BUILD)
 
-set(requires soc)
-set(priv_requires efuse bootloader_support spi_flash)
-if(${target} STREQUAL "esp32")
-     list(APPEND requires efuse)
+# On Linux, we only support a few features, hence this simple component registration
+if(${target} STREQUAL "linux")
+    # "include/linux" MUST come before "include" so that Linux-specific header
+    # overrides (e.g. esp_cpu.h) take precedence over the generic versions.
+    idf_component_register(SRCS "port/linux/esp_random.c"
+                                 "port/linux/chip_info.c"
+                                 "port/linux/cpu.c"
+                           INCLUDE_DIRS "include/linux" "include" "etm/include"
+                           REQUIRES esp_sleep)
+    return()
 endif()
 
-set(srcs "compare_set.c" "cpu_util.c")
-if(NOT BOOTLOADER_BUILD)
-    list(APPEND srcs "esp_async_memcpy.c"
-                     "esp_clk.c"
+set(public_include_dirs "include" "include/soc"
+                        "ldo/include" "debug_probe/include" "etm/include"
+                        "power_supply/include" "modem/include")
+
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/include/soc/${target}")
+    list(APPEND public_include_dirs
+        "include/soc/${target}"
+    )
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/port/${target}/include")
+    list(APPEND public_include_dirs
+        "port/${target}/include"
+    )
+endif()
+
+# TODO(IDF-15951): potentially remove __ULP_BUILDV2 handling from esp_hw_support
+if(__ULP_BUILDV2)
+    # ULP headers and LP-core runtime include esp_intr_alloc.h and esp_cpu.h from
+    # ulp/ulp_riscv/include/ulp_riscv.h and
+    # ulp/lp_core/lp_core/lp_core_ubsan.c.
+    idf_component_register(INCLUDE_DIRS ${public_include_dirs}
+                           REQUIRES esp_common esp_hal_gpio hal soc esp_sleep)
+    return()
+endif()
+
+# esp_sleep is a public requirement for backward compatibility, as esp_hw_support is a common requirement
+# and sleep APIs (esp_sleep.h etc.) used to be provided by esp_hw_support
+set(requires esp_sleep
+             esp_hal_gpio esp_hal_usb esp_hal_pmu esp_hal_regi2c esp_hal_uart esp_hal_debug_assist esp_hal_cache)
+set(priv_requires efuse                 # used by MAC address and other hardware support code
+                  esp_mspi
+                  bootloader_support
+                  esp_hal_wdt
+                  esp_hal_rtc_timer
+                  esp_hal_clock
+                  esp_hal_security
+                  esp_hal_systimer
+                  esp_hal_ana_conv
+                  )
+
+set(srcs "cpu.c" "port/${IDF_TARGET}/esp_cpu_intr.c" "esp_memory_utils.c" "port/${IDF_TARGET}/cpu_region_protect.c")
+if(NOT non_os_build)
+    list(APPEND srcs "esp_clk.c"
                      "clk_ctrl_os.c"
                      "hw_random.c"
                      "intr_alloc.c"
                      "mac_addr.c"
-                     "sleep_modes.c"
-                     "regi2c_ctrl.c")
-    list(APPEND requires esp_ipc)
+                     "periph_ctrl.c"
+                     "revision.c"
+                     "rtc_module.c"
+                     "regi2c_ctrl.c"
+                     "esp_gpio_reserve.c"
+                     "sar_tsens_ctrl.c"
+                     "sar_periph_ctrl_common.c"
+                     "io_mux.c"
+                     "port/${target}/io_mux.c"
+                     "port/${target}/esp_clk_tree.c"
+                     "spi_bus_lock.c"
+                     "heap_align_hw.c"
+                     "clk_utils.c"
+                     "esp_cache_cnt.c")
+    if(CONFIG_SOC_USB_OTG_SUPPORTED)
+        list(APPEND srcs "usb_phy/usb_phy.c")
+    endif()
+    if(CONFIG_SOC_CLK_TREE_SUPPORTED)
+        list(APPEND srcs "port/esp_clk_tree_common.c")
+        if(CONFIG_SOC_CLK_APLL_SUPPORTED)
+            list(APPEND srcs "port/esp_clk_tree_apll.c")
+        endif()
+    endif()
+    if(CONFIG_SOC_GPSPI_SUPPORTED)
+        list(APPEND srcs "spi_share_hw_ctrl.c")
+    endif()
+    if(CONFIG_SOC_ADC_SUPPORTED)
+        list(APPEND srcs "adc_share_hw_ctrl.c")
+    endif()
+    if(CONFIG_SOC_ISP_SHARE_CSI_BRG)
+        list(APPEND srcs "mipi_csi_share_hw_ctrl.c")
+    endif()
+    if(CONFIG_SOC_PMU_SUPPORTED)
+        list(APPEND srcs "pmu_share_hw.c")
+    endif()
+
+    # [refactor-todo]
+    list(APPEND priv_requires esp_driver_gpio   # for GPIO and RTC (by esp_clock_output and debug_probe)
+                              esp_timer
+                              esp_mm
+                              esp_hal_mspi
+                              esp_hal_uart
+    )
+
+    if(CONFIG_IDF_TARGET_ESP32 OR CONFIG_IDF_TARGET_ESP32S2)
+        list(APPEND srcs "rtc_wdt.c")
+    endif()
+
+    if(CONFIG_SOC_GP_LDO_SUPPORTED)
+        list(APPEND srcs "ldo/esp_ldo_regulator.c")
+    endif()
+
+    if(CONFIG_SOC_DEBUG_PROBE_SUPPORTED)
+        list(APPEND srcs "debug_probe/debug_probe.c")
+    endif()
+
+    if(CONFIG_SOC_SYSTIMER_SUPPORTED)
+        list(APPEND srcs "port/${target}/systimer.c")
+    endif()
+
+    if(CONFIG_SOC_ETM_SUPPORTED)
+        list(APPEND srcs "etm/esp_etm.c")
+        if(CONFIG_SOC_PAU_SUPPORTED)
+            list(APPEND srcs "port/${target}/etm_retention.c")
+        endif()
+    endif()
+
+    if(CONFIG_SOC_GPIO_CLOCKOUT_BY_GPIO_MATRIX OR CONFIG_SOC_GPIO_CLOCKOUT_BY_IO_MUX)
+        list(APPEND srcs "esp_clock_output.c")
+    endif()
+
+    if(CONFIG_SOC_BOD_SUPPORTED)
+        list(APPEND srcs "power_supply/brownout.c")
+    endif()
+
+    if(CONFIG_SOC_VBAT_SUPPORTED)
+        list(APPEND srcs "power_supply/vbat.c")
+    endif()
+
+    if(CONFIG_ESP_VDDBAT_UNDER_VOLT_PROTECT)
+        list(APPEND srcs "power_supply/vddbat_protect.c")
+    endif()
+
 else()
+    if(ESP_TEE_BUILD)
+        list(APPEND srcs "esp_clk.c" "hw_random.c")
+    endif()
+
     # Requires "_esp_error_check_failed()" function
     list(APPEND priv_requires "esp_system")
 endif()
 
+if(${target} STREQUAL "esp32p4")
+    # for mipi_csi_share_hw_ctrl.c
+    list(APPEND priv_requires esp_hal_cam)
+endif()
+
 idf_component_register(SRCS ${srcs}
-                       INCLUDE_DIRS include include/soc include/soc/${target}
-                       PRIV_INCLUDE_DIRS port/include
+                       INCLUDE_DIRS ${public_include_dirs}
+                       PRIV_INCLUDE_DIRS port/include include/esp_private
                        REQUIRES ${requires}
                        PRIV_REQUIRES "${priv_requires}"
-                       LDFRAGMENTS linker.lf)
+                       LDFRAGMENTS linker.lf ldo/linker.lf)
+
+idf_define_esp_err_codes(HEADERS include/esp_memprot_err.h)
 
 idf_build_get_property(target IDF_TARGET)
 add_subdirectory(port/${target})
+add_subdirectory(modem)
 
-if(CONFIG_IDF_TARGET_ESP32 AND CONFIG_SPIRAM_CACHE_WORKAROUND AND NOT BOOTLOADER_BUILD)
-    # Note: Adding as a PUBLIC compile option here causes this option to propagate to all
-    # components that depend on esp32.
-    #
-    # To handle some corner cases, the same flag is set in project_include.cmake
-    target_compile_options(${COMPONENT_LIB} PUBLIC -mfix-esp32-psram-cache-issue)
-    # also, make sure we link with this option so correct toolchain libs are pulled in
-    target_link_libraries(${COMPONENT_LIB} PUBLIC -mfix-esp32-psram-cache-issue)
-    # set strategy selected
-    # note that we don't need to set link options as the library linked is independent of this
-    if(CONFIG_SPIRAM_CACHE_WORKAROUND_STRATEGY_DUPLDST)
-        target_compile_options(${COMPONENT_LIB} PUBLIC -mfix-esp32-psram-cache-strategy=dupldst)
-        target_link_libraries(${COMPONENT_LIB} PUBLIC -mfix-esp32-psram-cache-strategy=dupldst)
-    endif()
-    if(CONFIG_SPIRAM_CACHE_WORKAROUND_STRATEGY_MEMW)
-        target_compile_options(${COMPONENT_LIB} PUBLIC -mfix-esp32-psram-cache-strategy=memw)
-        target_link_libraries(${COMPONENT_LIB} PUBLIC -mfix-esp32-psram-cache-strategy=memw)
-    endif()
-    if(CONFIG_SPIRAM_CACHE_WORKAROUND_STRATEGY_NOPS)
-        target_compile_options(${COMPONENT_LIB} PUBLIC -mfix-esp32-psram-cache-strategy=nops)
-        target_link_libraries(${COMPONENT_LIB} PUBLIC -mfix-esp32-psram-cache-strategy=nops)
+if(NOT non_os_build)
+    if(CONFIG_SPIRAM)
+        idf_component_optional_requires(PRIVATE esp_psram)
     endif()
 endif()
+
+if(${target} STREQUAL "esp32p4")
+    # for mipi_csi_share_hw_ctrl.c
+    idf_component_optional_requires(PRIVATE esp_hal_cam)
+endif()
+
+# Required in `adc_share_hw_ctrl.h`
+idf_component_optional_requires(PUBLIC esp_hal_ana_conv)

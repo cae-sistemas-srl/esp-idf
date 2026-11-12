@@ -7,20 +7,18 @@
    CONDITIONS OF ANY KIND, either express or implied.
 */
 
-#define CATCH_CONFIG_MAIN
-
 #include <stdio.h>
 #include "esp_event.h"
 
-#include "catch.hpp"
+#include <catch2/catch_test_macros.hpp>
 
 #include "fixtures.hpp"
 
 extern "C" {
 #include "Mocktask.h"
 #include "Mockqueue.h"
+#include "Mockportmacro.h"
 }
-
 
 namespace {
 
@@ -46,7 +44,8 @@ void dummy_handler(void* event_handler_arg, esp_event_base_t event_base, int32_t
 }
 
 // TODO: IDF-2693, function definition just to satisfy linker, implement esp_common instead
-const char *esp_err_to_name(esp_err_t code) {
+const char *esp_err_to_name(esp_err_t code)
+{
     return "test";
 }
 
@@ -104,6 +103,8 @@ TEST_CASE("test esp_event_loop_create no_task(void)")
     xQueueTakeMutexRecursive_IgnoreAndReturn(0);
     xQueueGiveMutexRecursive_IgnoreAndReturn(0);
     xQueueReceive_IgnoreAndReturn(0);
+    vPortEnterCritical_Ignore();
+    vPortExitCritical_Ignore();
     esp_event_loop_handle_t loop = nullptr;
 
     esp_event_loop_args_t loop_args = test_event_get_default_loop_args();
@@ -117,6 +118,8 @@ TEST_CASE("test esp_event_loop_create no_task(void)")
     xQueueReceive_StopIgnore();
     xQueueTakeMutexRecursive_StopIgnore();
     xQueueGiveMutexRecursive_StopIgnore();
+    vPortEnterCritical_StopIgnore();
+    vPortExitCritical_StopIgnore();
 }
 
 TEST_CASE("test esp_event_loop_create with_task(void)")
@@ -127,6 +130,8 @@ TEST_CASE("test esp_event_loop_create with_task(void)")
     xQueueTakeMutexRecursive_IgnoreAndReturn(0);
     xQueueGiveMutexRecursive_IgnoreAndReturn(0);
     xQueueReceive_IgnoreAndReturn(0);
+    vPortEnterCritical_Ignore();
+    vPortExitCritical_Ignore();
     esp_event_loop_handle_t loop = nullptr;
 
     esp_event_loop_args_t loop_args = test_event_get_default_loop_args();
@@ -140,13 +145,16 @@ TEST_CASE("test esp_event_loop_create with_task(void)")
     xQueueReceive_StopIgnore();
     xQueueTakeMutexRecursive_StopIgnore();
     xQueueGiveMutexRecursive_StopIgnore();
+    vPortEnterCritical_StopIgnore();
+    vPortExitCritical_StopIgnore();
 }
 
-TEST_CASE("registering with ANY_BASE but specific ID fails") {
+TEST_CASE("registering with ANY_BASE but specific ID fails")
+{
     esp_event_loop_handle_t loop = reinterpret_cast<esp_event_loop_handle_t>(1);
     CHECK(esp_event_handler_register_with(loop,
-            ESP_EVENT_ANY_BASE,
-            47,
-            dummy_handler,
-            nullptr) == ESP_ERR_INVALID_ARG);
+                                          ESP_EVENT_ANY_BASE,
+                                          47,
+                                          dummy_handler,
+                                          nullptr) == ESP_ERR_INVALID_ARG);
 }

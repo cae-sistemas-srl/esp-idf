@@ -1,22 +1,14 @@
-// Copyright 2015-2020 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 
 #include <xtensa/coreasm.h>
 #include <xtensa/corebits.h>
 #include <xtensa/config/system.h>
-#include "freertos/xtensa_context.h"
+#include "xtensa_context.h"
 #include "esp_private/panic_reason.h"
 #include "sdkconfig.h"
 #include "soc/soc.h"
@@ -45,12 +37,12 @@ _l4_intr_stack:
     .align      4
 xt_highint4:
 
-#ifndef CONFIG_FREERTOS_UNICORE
+#ifndef CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE
     /* See if we're here for the IPC_ISR interrupt */
-    rsr     a0, INTERRUPT
+    rsr     a0, XT_REG_INTERRUPT
     extui   a0, a0, ETS_IPC_ISR_INUM, 1
-    bnez    a0, esp_ipc_isr_handler
-#endif // not CONFIG_FREERTOS_UNICORE
+    bnez    a0, jump_to_esp_ipc_isr_handler
+#endif // not CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE
 
     /* Allocate exception frame and save minimal context. */
     mov     a0, sp
@@ -59,10 +51,12 @@ xt_highint4:
     #if XCHAL_HAVE_WINDOWED
     s32e    a0, sp, -12                     /* for debug backtrace */
     #endif
-    rsr     a0, PS                          /* save interruptee's PS */
+    rsr     a0, XT_REG_PS                   /* save interruptee's PS */
     s32i    a0, sp, XT_STK_PS
-    rsr     a0, EPC_4                       /* save interruptee's PC */
+    rsr     a0, XT_REG_EPC_4                /* save interruptee's PC */
     s32i    a0, sp, XT_STK_PC
+    rsr     a0, XT_REG_EXCSAVE_4            /* save interruptee's a0 */
+    s32i    a0, sp, XT_STK_A0
     #if XCHAL_HAVE_WINDOWED
     s32e    a0, sp, -16                     /* for debug backtrace */
     #endif
@@ -71,26 +65,26 @@ xt_highint4:
     call0   _xt_context_save
 
     /* Save vaddr into exception frame */
-    rsr     a0, EXCVADDR
+    rsr     a0, XT_REG_EXCVADDR
     s32i    a0, sp, XT_STK_EXCVADDR
 
     /* Figure out reason, save into EXCCAUSE reg */
 
-    rsr     a0, INTERRUPT
+    rsr     a0, XT_REG_INTERRUPT
     extui   a0, a0, ETS_CACHEERR_INUM, 1 /* get cacheerr int bit */
     beqz    a0, 1f
     /* Kill this interrupt; we cannot reset it. */
-    rsr     a0, INTENABLE
+    rsr     a0, XT_REG_INTENABLE
     movi    a4, ~(1<<ETS_CACHEERR_INUM)
     and     a0, a4, a0
-    wsr     a0, INTENABLE
+    wsr     a0, XT_REG_INTENABLE
     movi    a0, PANIC_RSN_CACHEERR
     j 9f
 
 1:
 #if CONFIG_ESP_INT_WDT_CHECK_CPU1
     /* Check if the cause is the app cpu failing to tick.*/
-    movi    a0, int_wdt_app_cpu_ticked
+    movi    a0, int_wdt_cpu1_ticked
     l32i    a0, a0, 0
     bnez    a0, 2f
     /* It is. Modify cause. */
@@ -105,14 +99,9 @@ xt_highint4:
     /* Found the reason, now save it. */
     s32i    a0, sp, XT_STK_EXCCAUSE
 
-    /* _xt_context_save seems to save the current a0, but we need the interuptees a0. Fix this. */
-    rsr     a0, EXCSAVE_4                   /* save interruptee's a0 */
-
-    s32i    a0, sp, XT_STK_A0
-
     /* Set up PS for C, disable all interrupts except NMI and debug, and clear EXCM. */
     movi    a0, PS_INTLEVEL(5) | PS_UM | PS_WOE
-    wsr     a0, PS
+    wsr     a0, XT_REG_PS
 
     //Call panic handler
     mov     a6,sp
@@ -120,15 +109,23 @@ xt_highint4:
 
     call0   _xt_context_restore
     l32i    a0, sp, XT_STK_PS               /* retrieve interruptee's PS */
-    wsr     a0, PS
+    wsr     a0, XT_REG_PS
     l32i    a0, sp, XT_STK_PC               /* retrieve interruptee's PC */
-    wsr     a0, EPC_4
+    wsr     a0, XT_REG_EPC_4
     l32i    a0, sp, XT_STK_A0               /* retrieve interruptee's A0 */
     l32i    sp, sp, XT_STK_A1               /* remove exception frame */
     rsync                                   /* ensure PS and EPC written */
 
-    rsr     a0, EXCSAVE_4                   /* restore a0 */
+    rsr     a0, XT_REG_EXCSAVE_4            /* restore a0 */
     rfi     4
+
+#ifdef CONFIG_ESP_IPC_ISR_ENABLE
+jump_to_esp_ipc_isr_handler:
+    /* Address of `esp_ipc_isr_handler_address` will always be in `movi` range
+     * as it is defined right above. */
+    movi    a0, esp_ipc_isr_handler
+    jx      a0
+#endif
 
 /* The linker has no reason to link in this file; all symbols it exports are already defined
    (weakly!) in the default int handler. Define a symbol here so we can use it to have the

@@ -15,8 +15,9 @@
 
 #define TIME_IS_OUT(start, end, timeout)     (timeout) > ((end)-(start)) ? 0 : 1
 
-//Pin setting
-#ifdef CONFIG_IDF_TARGET_ESP32S2
+//////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////// Please update the following configuration according to your Hardware spec /////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////////
 #define GPIO_MOSI 11
 #define GPIO_MISO 13
 #define GPIO_SCLK 12
@@ -25,7 +26,6 @@
 #define SLAVE_HOST SPI2_HOST
 #define DMA_CHAN   SPI_DMA_CH_AUTO
 #define QUEUE_SIZE 4
-#endif
 
 /**
  * Helper Macros for Master-Slave synchronization, each setting is 4-byte-width
@@ -33,6 +33,7 @@
  * The address and value should be negotiated with Master beforehand
  */
 //----------------------General Settings---------------------//
+#define SLAVE_SHARE_REG_NUM             5   // number of shared registers list below
 //Indicate Slave General Settings are ready
 #define SLAVE_READY_FLAG_REG            0
 #define SLAVE_READY_FLAG                0xEE
@@ -47,7 +48,6 @@
 //Value in these 4 registers indicates number of the RX buffer that Slave has loaded to the DMA
 #define SLAVE_RX_READY_BUF_NUM_REG      16
 
-
 static const char TAG[] = "SEG_SLAVE";
 
 /* Used for Master-Slave synchronization */
@@ -55,7 +55,6 @@ static uint32_t s_tx_ready_buf_size;  //See ``cb_set_tx_ready_buf_size()``
 static uint32_t s_rx_ready_buf_num;   //See ``cb_set_rx_ready_buf_num()``
 
 static uint32_t s_tx_data_id;
-
 
 //-------------------------------Function used for Master-Slave Synchronization---------------------------//
 /**
@@ -151,7 +150,7 @@ static bool get_tx_data(uint8_t *data, uint32_t max_len, uint32_t *out_len)
         return false;
     }
 
-    snprintf((char *)data, *out_len, "Transaction No.%d from slave, length: %d", s_tx_data_id, *out_len);
+    snprintf((char *)data, *out_len, "Transaction No.%"PRIu32" from slave, length: %"PRIu32, s_tx_data_id, *out_len);
     s_tx_data_id++;
     return true;
 }
@@ -200,7 +199,9 @@ void sender(void *arg)
             data_ready = get_tx_data(send_buf[descriptor_id], send_buf_size, &ready_data_size);
             if (data_ready) {
                 slave_trans[descriptor_id].data = send_buf[descriptor_id];
-                slave_trans[descriptor_id].len = ready_data_size;
+                slave_trans[descriptor_id].len = send_buf_size;
+                //To use dma, data buffer address and trans_len should byte align to hardware requirement, or using following flag for auto deal by driver.
+                slave_trans[descriptor_id].flags |= SPI_SLAVE_HD_TRANS_DMA_BUFFER_ALIGN_AUTO;
                 //Due to the `queue_sent_cnt` and `queue_recv_cnt` logic above, we are sure there is space to send data, this will return ESP_OK immediately
                 ESP_ERROR_CHECK(spi_slave_hd_queue_trans(SLAVE_HOST, SPI_SLAVE_CHAN_TX, &slave_trans[descriptor_id], portMAX_DELAY));
                 descriptor_id = (descriptor_id + 1) % QUEUE_SIZE;   //descriptor_id will be: 0, 1, 2, ..., QUEUE_SIZE, 0, 1, ....
@@ -236,7 +237,7 @@ void receiver(void *arg)
     uint8_t *recv_buf[QUEUE_SIZE];
     spi_slave_hd_data_t slave_trans[QUEUE_SIZE];
     for (int i = 0; i < QUEUE_SIZE; i++) {
-        recv_buf[i] = heap_caps_calloc(1, recv_buf_size, MALLOC_CAP_DMA);
+        recv_buf[i] = spi_bus_dma_memory_alloc(SLAVE_HOST, recv_buf_size, MALLOC_CAP_8BIT);
         if (!recv_buf[i]) {
             ESP_LOGE(TAG, "No enough memory!");
             abort();
@@ -251,6 +252,7 @@ void receiver(void *arg)
     for (int i = 0; i < QUEUE_SIZE; i++) {
         slave_trans[descriptor_id].data = recv_buf[descriptor_id];
         slave_trans[descriptor_id].len = recv_buf_size;
+        slave_trans[descriptor_id].flags |= SPI_SLAVE_HD_TRANS_DMA_BUFFER_ALIGN_AUTO;
         ESP_ERROR_CHECK(spi_slave_hd_queue_trans(SLAVE_HOST, SPI_SLAVE_CHAN_RX, &slave_trans[descriptor_id], portMAX_DELAY));
         descriptor_id = (descriptor_id + 1) % QUEUE_SIZE;   //descriptor_id will be: 0, 1, 2, ..., QUEUE_SIZE, 0, 1, ....
     }
@@ -268,7 +270,6 @@ void receiver(void *arg)
          */
         ESP_ERROR_CHECK(spi_slave_hd_get_trans_res(SLAVE_HOST, SPI_SLAVE_CHAN_RX, &ret_trans, portMAX_DELAY));
         //Process the received data in your own code. Here we just print it out.
-        printf("%d bytes are received: \n%s\n", ret_trans->trans_len, ret_trans->data);
         memset(ret_trans->data, 0x0, recv_buf_size);
 
         /**
@@ -287,17 +288,17 @@ void app_main(void)
     init_slave_hd();
 
     //Reset the shared register to 0
-    uint8_t init_value[SOC_SPI_MAXIMUM_BUFFER_SIZE] = {0x0};
-    spi_slave_hd_write_buffer(SLAVE_HOST, 0, init_value, SOC_SPI_MAXIMUM_BUFFER_SIZE);
+    uint8_t init_value[SLAVE_SHARE_REG_NUM * 4] = {0x0};
+    spi_slave_hd_write_buffer(SLAVE_HOST, 0, init_value, sizeof(init_value));
 
-    uint32_t send_buf_size = 5000;
-    spi_slave_hd_write_buffer(SLAVE_HOST, SLAVE_MAX_TX_BUF_LEN_REG, (uint8_t *)&send_buf_size, 4);
+    static uint32_t send_buf_size = 4800;
+    spi_slave_hd_write_buffer(SLAVE_HOST, SLAVE_MAX_TX_BUF_LEN_REG, (uint8_t *)&send_buf_size, sizeof(send_buf_size));
 
-    uint32_t recv_buf_size = 120;
-    spi_slave_hd_write_buffer(SLAVE_HOST, SLAVE_MAX_RX_BUF_LEN_REG, (uint8_t *)&recv_buf_size, 4);
+    static uint32_t recv_buf_size = 128;
+    spi_slave_hd_write_buffer(SLAVE_HOST, SLAVE_MAX_RX_BUF_LEN_REG, (uint8_t *)&recv_buf_size, sizeof(recv_buf_size));
 
     uint32_t slave_ready_flag = SLAVE_READY_FLAG;
-    spi_slave_hd_write_buffer(SLAVE_HOST, SLAVE_READY_FLAG_REG, (uint8_t *)&slave_ready_flag, 4);
+    spi_slave_hd_write_buffer(SLAVE_HOST, SLAVE_READY_FLAG_REG, (uint8_t *)&slave_ready_flag, sizeof(slave_ready_flag));
 
     xTaskCreate(sender, "sendTask", 4096, &send_buf_size, 1, NULL);
     xTaskCreate(receiver, "recvTask", 4096, &recv_buf_size, 1, NULL);

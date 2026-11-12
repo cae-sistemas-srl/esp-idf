@@ -37,8 +37,10 @@
 #define SDP_MAX_CONTINUATION_LEN    16          /* As per the spec */
 
 /* Timeout definitions. */
-#define SDP_INACT_TIMEOUT       30              /* Inactivity timeout         */
-
+#define SDP_INACT_TIMEOUT           30          /* Inactivity timeout */
+#if BT_SDP_BQB_INCLUDED
+#define SDP_BQB_INACT_TIMEOUT       90          /* Inactivity timeout for BQB test */
+#endif /* BT_SDP_BQB_INCLUDED */
 
 /* Define the Out-Flow default values. */
 #define  SDP_OFLOW_QOS_FLAG                 0
@@ -198,6 +200,10 @@ typedef struct {
 
     UINT8             disc_state;
     UINT8             is_attr_search;
+#if BT_SDP_BQB_INCLUDED
+    UINT8             is_search_only;           /* BQB: stop after SS, do not auto-SA */
+    UINT8             is_attr_only;             /* BQB: skip SS, send SA for handles[] */
+#endif
 #endif  /* SDP_CLIENT_ENABLED == TRUE */
 
 #if SDP_SERVER_ENABLED == TRUE
@@ -274,7 +280,7 @@ extern void      sdpu_build_n_send_error (tCONN_CB *p_ccb, UINT16 trans_num, UIN
 extern UINT8    *sdpu_extract_attr_seq (UINT8 *p, UINT16 param_len, tSDP_ATTR_SEQ *p_seq);
 extern UINT8    *sdpu_extract_uid_seq (UINT8 *p, UINT16 param_len, tSDP_UUID_SEQ *p_seq);
 
-extern UINT8    *sdpu_get_len_from_type (UINT8 *p, UINT8 type, UINT32 *p_len);
+extern UINT8    *sdpu_get_len_from_type (UINT8 *p, UINT8 *p_end, UINT8 type, UINT32 *p_len);
 extern BOOLEAN  sdpu_is_base_uuid (UINT8 *p_uuid);
 extern BOOLEAN  sdpu_compare_uuid_arrays (UINT8 *p_uuid1, UINT32 len1, UINT8 *p_uuid2, UINT16 len2);
 extern BOOLEAN  sdpu_compare_bt_uuids (tBT_UUID *p_uuid1, tBT_UUID *p_uuid2);
@@ -307,6 +313,10 @@ extern void     sdp_server_handle_client_req (tCONN_CB *p_ccb, BT_HDR *p_msg);
 #if SDP_CLIENT_ENABLED == TRUE
 extern void sdp_disc_connected (tCONN_CB *p_ccb);
 extern void sdp_disc_server_rsp (tCONN_CB *p_ccb, BT_HDR *p_msg);
+#if BT_SDP_BQB_INCLUDED
+extern void sdp_bqb_save_search_handles(const UINT32 *handles, UINT16 num);
+extern BOOLEAN sdp_bqb_take_data_len_min_48(void);
+#endif
 #else
 #define sdp_disc_connected(p_ccb)
 #define sdp_disc_server_rsp(p_ccb, p_msg)

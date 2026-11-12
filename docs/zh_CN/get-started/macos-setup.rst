@@ -1,70 +1,85 @@
-**********************************************
-macOS 平台工具链的标准设置
-**********************************************
+************************************************
+在 macOS 上安装 ESP-IDF 及工具链
+************************************************
 
 :link_to_translation:`en:[English]`
 
-安装准备
-=====================
+本章节将介绍如何使用 ESP-IDF 安装管理器 (EIM) 在 macOS 上安装 ESP-IDF 及其所需工具。
 
-ESP-IDF 将使用 macOS 上默认安装的 Python 版本。
+.. note::
 
-- 安装 pip::
+   本章节描述了 ESP-IDF v6.0 及以上版本的默认和推荐安装方式。如使用 ESP-IDF v6.0 之前版本的默认安装方式，请参考 :doc:`macOS 上的传统安装方法 <linux-macos-setup-legacy>`。
 
-    sudo easy_install pip
 
-- 安装 CMake 和 Ninja 编译工具：
+第一步：安装依赖包
+====================
 
-    - 若有 HomeBrew_，您可以运行::
+通过 `Homebrew <https://brew.sh/>`__ 安装所需的依赖包：
 
-        brew install cmake ninja dfu-util
+.. code-block:: bash
 
-    - 若有 MacPorts_，您可以运行::
+    brew install libgcrypt glib pixman sdl2 libslirp dfu-util cmake python
 
-        sudo port install cmake ninja dfu-util
+.. note::
 
-    - 若以上均不适用，请访问 CMake_ 和 Ninja_ 主页，查询有关 macOS 平台的下载安装问题。
+    ESP-IDF  要求 Python 版本至少为 3.11。
 
-- 强烈建议同时安装 ccache_ 以获得更快的编译速度。如有 HomeBrew_，可通过 MacPorts_ 上的 ``brew install ccache`` 或 ``sudo port install ccache`` 完成安装。
+    EIM 所需的 Python 版本，请参考 `EIM 文档 <https://docs.espressif.com/projects/idf-im-ui/en/latest/prerequisites.html#python-version>`_。
 
-.. note::   
-    如您在上述任何步骤中遇到以下错误::
 
-    ``xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools), missing xcrun at:/Library/Developer/CommandLineTools/usr/bin/xcrun``
+第二步：安装 EIM
+=======================
 
-    则必须安装 XCode 命令行工具，具体可运行 ``xcode-select --install``。
+您可以使用以下任一方法安装 EIM：
 
-安装 Python 3
----------------------------------------------
+- `下载 EIM`_
+- `通过 Homebrew 安装 EIM`_
 
-`Catalina 10.15 发布说明`_ 中表示不推荐使用 Python 2.7 版本，在未来的 macOS 版本中也不会默认包含 Python 2.7。执行以下命令来检查您当前使用的 Python 版本::
+如果通过 Homebrew 安装 EIM，后续运行单个命令，即可轻松升级更新 EIM。
 
-  python --version
 
-如果输出结果是 ``Python 2.7.17``，则代表您的默认解析器是 Python 2.7。这时需要您运行以下命令检查电脑上是否已经安装过 Python 3::
+下载 EIM
+~~~~~~~~~
 
-  python3 --version
+.. figure:: ../../_static/get-started-eim-download.drawio.png
+   :alt: EIM 下载页面
+   :align: left
+   :width: 35%
+   :target: https://dl.espressif.com/dl/eim/
 
-如果运行上述命令出现错误，则代表电脑上没有安装 Python 3。
+可选择下载在线或离线安装程序的图形用户界面 (GUI) 或命令行界面 (CLI) 版本。
 
-请根据以下步骤安装 Python 3：
 
-  - 使用 HomeBrew_ 进行安装的方法如下::
+通过 Homebrew 安装 EIM
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
-      brew install python3
+将 EIM 仓库添加到 `Homebrew <https://brew.sh/>`__ 中，以便后续使用 Homebrew 安装 EIM：
 
-  - 使用 MacPorts_ 进行安装的方法如下::
+.. code-block:: bash
 
-      sudo port install python38
+    brew tap espressif/eim
 
-后续步骤
-==========
+然后，通过 Homebrew 安装 EIM 的图形用户界面 (GUI) 或命令行界面 (CLI)：
 
-请前往 :ref:`get-started-get-esp-idf` 章节继续设置开发环境。
+- GUI：
+    .. code-block:: bash
 
-.. _cmake: https://cmake.org/
-.. _ninja: https://ninja-build.org/
-.. _ccache: https://ccache.samba.org/
-.. _homebrew: https://brew.sh/
-.. _MacPorts: https://www.macports.org/install.php
-.. _Catalina 10.15 发布说明: https://developer.apple.com/documentation/macos-release-notes/macos-catalina-10_15-release-notes
+        brew install --cask eim-gui
+
+- CLI：
+    .. code-block:: bash
+
+        brew install eim
+
+
+第三步：使用 EIM 安装 ESP-IDF
+==============================
+
+.. include:: eim-install-idf.rst
+
+.. toctree::
+    :hidden:
+    :maxdepth: 1
+    :caption: Legacy Installation
+
+    linux-macos-setup-legacy

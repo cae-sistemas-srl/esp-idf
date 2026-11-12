@@ -1,70 +1,85 @@
-**********************************************
-Standard Setup of Toolchain for Mac OS
-**********************************************
+************************************************
+Installation of ESP-IDF and Tools on macOS
+************************************************
 
 :link_to_translation:`zh_CN:[中文]`
 
-Install Prerequisites
-=====================
-
-ESP-IDF will use the version of Python installed by default on macOS.
-
-- install pip::
-
-    sudo easy_install pip
-
-- install CMake & Ninja build:
-
-  - If you have HomeBrew_, you can run::
-
-      brew install cmake ninja dfu-util
-
-  - If you have MacPorts_, you can run::
-
-      sudo port install cmake ninja dfu-util
-
-  - Otherwise, consult the CMake_ and Ninja_ home pages for macOS installation downloads.
-
-- It is strongly recommended to also install ccache_ for faster builds. If you have HomeBrew_, this can be done via ``brew install ccache`` or ``sudo port install ccache`` on MacPorts_.
+This section describes how to install ESP-IDF and its required tools on macOS using the Espressif Installation Manager (EIM).
 
 .. note::
-   If an error like this is shown during any step::
 
-     xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools), missing xcrun at: /Library/Developer/CommandLineTools/usr/bin/xcrun
+    This document describes the default and recommended way to install ESP-IDF v6.0 and newer versions. ESP-IDF also supports the :doc:`legacy installation method on macOS <linux-macos-setup-legacy>`, which was the default before ESP-IDF v6.0.
 
-   Then you will need to install the XCode command line tools to continue. You can install these by running ``xcode-select --install``.
 
-Installing Python 3
--------------------
+Step 1: Install the Prerequisites
+=================================
 
-Basing on macOS `Catalina 10.15 release notes`_, use of Python 2.7 is not recommended and Python 2.7 will not be included by default in future versions of macOS. Check what Python you currently have::
+Install the required prerequisites via `Homebrew <https://brew.sh/>`_:
 
-  python --version
+.. code-block:: bash
 
-If the output is like ``Python 2.7.17``, your default interpreter is Python 2.7. If so, also check if Python 3 isn't already installed on your computer::
+    brew install libgcrypt glib pixman sdl2 libslirp dfu-util cmake python
 
-  python3 --version
+.. note::
 
-If above command returns an error, it means Python 3 is not installed. 
+    Python 3.11 is the minimum supported version for ESP-IDF.
 
-Below is an overview of steps to install Python 3.
+    For the Python version required by the EIM, please refer to the `EIM documentation <https://docs.espressif.com/projects/idf-im-ui/en/latest/prerequisites.html#python-version>`_.
 
-  - Installing with HomeBrew_ can be done as follows::
 
-      brew install python3
+Step 2: Install the EIM
+=======================
 
-  - If you have MacPorts_, you can run::
+You can install the EIM using one of the following methods:
 
-      sudo port install python38
+- `Download the EIM`_
+- `Install the EIM with Package Manager Homebrew`_
 
-Next Steps
-==========
+Installing EIM with Homebrew allows you to easily keep EIM up to date with a single command.
 
-To carry on with development environment setup, proceed to :ref:`get-started-get-esp-idf`.
 
-.. _cmake: https://cmake.org/
-.. _ninja: https://ninja-build.org/
-.. _ccache: https://ccache.samba.org/
-.. _homebrew: https://brew.sh/
-.. _MacPorts: https://www.macports.org/install.php
-.. _Catalina 10.15 release notes: https://developer.apple.com/documentation/macos-release-notes/macos-catalina-10_15-release-notes
+Download the EIM
+~~~~~~~~~~~~~~~~~
+
+.. figure:: ../../_static/get-started-eim-download.drawio.png
+   :alt: EIM Download Page
+   :align: left
+   :width: 35%
+   :target: https://dl.espressif.com/dl/eim/
+
+You can choose either an online or offline installer, available in Graphical User Interface (GUI) or Command Line Interface (CLI) versions.
+
+
+Install the EIM with Package Manager Homebrew
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Add the EIM repository to the `Homebrew <https://brew.sh/>`__ to make it available for installation:
+
+.. code-block:: bash
+
+    brew tap espressif/eim
+
+Then, install the EIM Graphical User Interface (GUI) or Command Line Interface (CLI) via Homebrew:
+
+- GUI:
+    .. code-block:: bash
+
+        brew install --cask eim-gui
+
+- CLI:
+    .. code-block:: bash
+
+        brew install eim
+
+
+Step 3: Install ESP-IDF Using EIM
+=================================
+
+.. include:: eim-install-idf.rst
+
+.. toctree::
+    :hidden:
+    :maxdepth: 1
+    :caption: Legacy Installation
+
+    linux-macos-setup-legacy

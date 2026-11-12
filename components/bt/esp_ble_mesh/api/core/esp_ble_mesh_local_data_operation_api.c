@@ -1,16 +1,8 @@
-// Copyright 2017-2019 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2017-2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <stdint.h>
 #include <string.h>
@@ -25,6 +17,7 @@ int32_t esp_ble_mesh_get_model_publish_period(esp_ble_mesh_model_t *model)
     if (model == NULL) {
         return 0;
     }
+
     return btc_ble_mesh_model_pub_period_get(model);
 }
 
@@ -39,6 +32,7 @@ uint16_t *esp_ble_mesh_is_model_subscribed_to_group(esp_ble_mesh_model_t *model,
     if (model == NULL) {
         return NULL;
     }
+
     return btc_ble_mesh_model_find_group(model, group_addr);
 }
 
@@ -47,6 +41,7 @@ esp_ble_mesh_elem_t *esp_ble_mesh_find_element(uint16_t element_addr)
     if (!ESP_BLE_MESH_ADDR_IS_UNICAST(element_addr)) {
         return NULL;
     }
+
     return btc_ble_mesh_elem_find(element_addr);
 }
 
@@ -61,6 +56,7 @@ esp_ble_mesh_model_t *esp_ble_mesh_find_vendor_model(const esp_ble_mesh_elem_t *
     if (element == NULL) {
         return NULL;
     }
+
     return btc_ble_mesh_model_find_vnd(element, company_id, model_id);
 }
 
@@ -70,6 +66,7 @@ esp_ble_mesh_model_t *esp_ble_mesh_find_sig_model(const esp_ble_mesh_elem_t *ele
     if (element == NULL) {
         return NULL;
     }
+
     return btc_ble_mesh_model_find(element, model_id);
 }
 
@@ -100,7 +97,7 @@ esp_err_t esp_ble_mesh_model_subscribe_group_addr(uint16_t element_addr, uint16_
     arg.model_sub_group_addr.model_id = model_id;
     arg.model_sub_group_addr.group_addr = group_addr;
 
-    return (btc_transfer_context(&msg, &arg, sizeof(btc_ble_mesh_prov_args_t), NULL)
+    return (btc_transfer_context(&msg, &arg, sizeof(btc_ble_mesh_prov_args_t), NULL, NULL)
             == BT_STATUS_SUCCESS ? ESP_OK : ESP_FAIL);
 }
 
@@ -126,9 +123,20 @@ esp_err_t esp_ble_mesh_model_unsubscribe_group_addr(uint16_t element_addr, uint1
     arg.model_unsub_group_addr.model_id = model_id;
     arg.model_unsub_group_addr.group_addr = group_addr;
 
-    return (btc_transfer_context(&msg, &arg, sizeof(btc_ble_mesh_prov_args_t), NULL)
+    return (btc_transfer_context(&msg, &arg, sizeof(btc_ble_mesh_prov_args_t), NULL, NULL)
             == BT_STATUS_SUCCESS ? ESP_OK : ESP_FAIL);
 }
+
+#if CONFIG_BLE_MESH_DF_SRV
+esp_err_t esp_ble_mesh_enable_directed_forwarding(uint16_t net_idx, bool directed_forwarding,
+                                                  bool directed_forwarding_relay)
+{
+    ESP_BLE_HOST_STATUS_CHECK(ESP_BLE_HOST_STATUS_ENABLED);
+
+    return (btc_ble_mesh_enable_directed_forwarding(net_idx, directed_forwarding,
+                                                    directed_forwarding_relay) == 0 ? ESP_OK : ESP_FAIL);
+}
+#endif /* CONFIG_BLE_MESH_DF_SRV */
 
 #if CONFIG_BLE_MESH_NODE
 
@@ -160,7 +168,7 @@ esp_err_t esp_ble_mesh_node_add_local_net_key(const uint8_t net_key[16], uint16_
     arg.node_add_local_net_key.net_idx = net_idx;
     memcpy(arg.node_add_local_net_key.net_key, net_key, 16);
 
-    return (btc_transfer_context(&msg, &arg, sizeof(btc_ble_mesh_prov_args_t), NULL)
+    return (btc_transfer_context(&msg, &arg, sizeof(btc_ble_mesh_prov_args_t), NULL, NULL)
             == BT_STATUS_SUCCESS ? ESP_OK : ESP_FAIL);
 }
 
@@ -183,7 +191,7 @@ esp_err_t esp_ble_mesh_node_add_local_app_key(const uint8_t app_key[16], uint16_
     arg.node_add_local_app_key.app_idx = app_idx;
     memcpy(arg.node_add_local_app_key.app_key, app_key, 16);
 
-    return (btc_transfer_context(&msg, &arg, sizeof(btc_ble_mesh_prov_args_t), NULL)
+    return (btc_transfer_context(&msg, &arg, sizeof(btc_ble_mesh_prov_args_t), NULL, NULL)
             == BT_STATUS_SUCCESS ? ESP_OK : ESP_FAIL);
 }
 
@@ -208,7 +216,7 @@ esp_err_t esp_ble_mesh_node_bind_app_key_to_local_model(uint16_t element_addr, u
     arg.node_local_mod_app_bind.company_id = company_id;
     arg.node_local_mod_app_bind.app_idx = app_idx;
 
-    return (btc_transfer_context(&msg, &arg, sizeof(btc_ble_mesh_prov_args_t), NULL)
+    return (btc_transfer_context(&msg, &arg, sizeof(btc_ble_mesh_prov_args_t), NULL, NULL)
             == BT_STATUS_SUCCESS ? ESP_OK : ESP_FAIL);
 }
 

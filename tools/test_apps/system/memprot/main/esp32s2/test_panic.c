@@ -1,24 +1,48 @@
-// Copyright 2015-2016 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
+/*
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-#include "freertos/xtensa_context.h"
+#include "xtensa_context.h"
 #include "esp_private/panic_internal.h"
+#include "hal/wdt_hal.h"
 
 extern void esp_panic_handler(panic_info_t *info);
 extern volatile bool g_override_illegal_instruction;
 
 void __real_esp_panic_handler(panic_info_t *info);
+void __real_esp_panic_handler_feed_wdts(void);
+void __real_esp_panic_handler_enable_rtc_wdt(uint32_t timeout_ms);
+void __real_esp_panic_handler_increment_entry_count(void);
+void __real_esp_cpu_stall(int core_id);
+
+static void disable_all_wdts(void)
+{
+    wdt_hal_context_t wdt0_context = {.inst = WDT_MWDT0, .mwdt_dev = &TIMERG0};
+#if TIMG_LL_GET(INST_NUM) >= 2
+    wdt_hal_context_t wdt1_context = {.inst = WDT_MWDT1, .mwdt_dev = &TIMERG1};
+#endif
+
+    //Todo: Refactor to use Interrupt or Task Watchdog API, and a system level WDT context
+    //Task WDT is the Main Watchdog Timer of Timer Group 0
+    wdt_hal_write_protect_disable(&wdt0_context);
+    wdt_hal_disable(&wdt0_context);
+    wdt_hal_write_protect_enable(&wdt0_context);
+
+#if TIMG_LL_GET(INST_NUM) >= 2
+    //Interrupt WDT is the Main Watchdog Timer of Timer Group 1
+    wdt_hal_write_protect_disable(&wdt1_context);
+    wdt_hal_disable(&wdt1_context);
+    wdt_hal_write_protect_enable(&wdt1_context);
+#endif
+
+    //Disable RTC WDT
+    wdt_hal_context_t rtc_wdt_ctx = RWDT_HAL_CONTEXT_DEFAULT();
+    wdt_hal_write_protect_disable(&rtc_wdt_ctx);
+    wdt_hal_disable(&rtc_wdt_ctx);
+    wdt_hal_write_protect_enable(&rtc_wdt_ctx);
+}
 
 /* Memprot test specific IllegalInstruction exception handler:
  * when testing the protection against a code execution, sample code
@@ -34,10 +58,47 @@ void __real_esp_panic_handler(panic_info_t *info);
 void __wrap_esp_panic_handler(panic_info_t *info)
 {
     XtExcFrame *frm = (XtExcFrame *)info->frame;
-    if ( frm->exccause == EXCCAUSE_ILLEGAL && g_override_illegal_instruction == true ) {
+    if (frm->exccause == EXCCAUSE_ILLEGAL && g_override_illegal_instruction == true) {
         frm->pc = frm->a0;
         return;
     } else {
         __real_esp_panic_handler(info);
+    }
+}
+
+void __wrap_esp_panic_handler_feed_wdts(void)
+{
+    if ( g_override_illegal_instruction == true ) {
+        disable_all_wdts();
+        return;
+    } else {
+        __real_esp_panic_handler_feed_wdts();
+    }
+}
+
+void __wrap_esp_panic_handler_enable_rtc_wdt(uint32_t timeout_ms)
+{
+    if ( g_override_illegal_instruction == true ) {
+        return;
+    } else {
+        __real_esp_panic_handler_enable_rtc_wdt(timeout_ms);
+    }
+}
+
+void __wrap_esp_panic_handler_increment_entry_count(void)
+{
+    if ( g_override_illegal_instruction == true ) {
+        return;
+    } else {
+        __real_esp_panic_handler_increment_entry_count();
+    }
+}
+
+void __wrap_esp_cpu_stall(int core_id)
+{
+    if (g_override_illegal_instruction == true) {
+        return;
+    } else {
+        __real_esp_cpu_stall(core_id);
     }
 }

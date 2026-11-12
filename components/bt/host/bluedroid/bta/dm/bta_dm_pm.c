@@ -32,6 +32,8 @@
 #include "stack/btm_api.h"
 #include "osi/allocator.h"
 
+#if (CLASSIC_BT_INCLUDED == TRUE)
+
 #if BTA_DYNAMIC_MEMORY == FALSE
 tBTA_DM_CONNECTED_SRVCS  bta_dm_conn_srvcs;
 #else
@@ -43,18 +45,21 @@ static void bta_dm_pm_cback(tBTA_SYS_CONN_STATUS status, UINT8 id, UINT8 app_id,
 static void bta_dm_pm_set_mode(BD_ADDR peer_addr, tBTA_DM_PM_ACTION pm_mode,
                                tBTA_DM_PM_REQ pm_req);
 static void bta_dm_pm_timer_cback(void *p_tle);
-static void bta_dm_pm_btm_cback(BD_ADDR bd_addr, tBTM_PM_STATUS status, UINT16 value, UINT8 hci_status);
+static void bta_dm_pm_btm_cback(BD_ADDR bd_addr, tBTM_PM_STATUS status, UINT16 value, UINT8 hci_status,
+                                const tBTM_SSR_PARAMS *p_ssr);
 static BOOLEAN bta_dm_pm_park(BD_ADDR peer_addr);
 static BOOLEAN bta_dm_pm_sniff(tBTA_DM_PEER_DEVICE *p_peer_dev, UINT8 index);
 static BOOLEAN bta_dm_pm_is_sco_active (void);
 static void bta_dm_pm_hid_check(BOOLEAN bScoActive);
 static void bta_dm_pm_set_sniff_policy(tBTA_DM_PEER_DEVICE *p_dev, BOOLEAN bDisable);
+static void bta_dm_sniff_allowed_notify(tBTM_CMPL_CB *p_cb, BD_ADDR remote_bda,
+                                        BOOLEAN allowed, tBTM_STATUS status);
 static void bta_dm_pm_stop_timer_by_index(tBTA_PM_TIMER *p_timer,
         UINT8 timer_idx);
 
 #if (BTM_SSR_INCLUDED == TRUE)
 #if (defined BTA_HH_INCLUDED && BTA_HH_INCLUDED == TRUE)
-#include "../hh/bta_hh_int.h"
+#include "bta_hh_int.h"
 /* BTA_DM_PM_SSR1 will be dedicated for HH SSR setting entry, no other profile can use it */
 #define BTA_DM_PM_SSR_HH      BTA_DM_PM_SSR1
 #endif /* (defined BTA_HH_INCLUDED && BTA_HH_INCLUDED == TRUE) */
@@ -75,7 +80,7 @@ void bta_dm_init_pm(void)
 {
     memset(&bta_dm_conn_srvcs, 0x00, sizeof(bta_dm_conn_srvcs));
 
-    /* if there are no power manger entries, so not register */
+    /* if there are no power manager entries, so not register */
     if (p_bta_dm_pm_cfg[0].app_id != 0) {
         bta_sys_pm_register((tBTA_SYS_CONN_CBACK *)bta_dm_pm_cback);
 
@@ -322,13 +327,12 @@ static void bta_dm_pm_cback(tBTA_SYS_CONN_STATUS status, UINT8 id, UINT8 app_id,
     tBTA_DM_PEER_DEVICE *p_dev;
 
 #if (BTM_SSR_INCLUDED == TRUE)
-    UINT8 *p = NULL;
     int               index = BTA_DM_PM_SSR0;
 #endif
 
     APPL_TRACE_DEBUG("bta_dm_pm_cback: st(%d), id(%d), app(%d)", status, id, app_id);
 
-    p_dev = bta_dm_find_peer_device(peer_addr);
+    p_dev = bta_dm_find_peer_device(peer_addr, BT_TRANSPORT_BR_EDR);
 
     /* find if there is an power mode entry for the service */
     for (i = 1; i <= p_bta_dm_pm_cfg[0].app_id; i++) {
@@ -346,7 +350,7 @@ static void bta_dm_pm_cback(tBTA_SYS_CONN_STATUS status, UINT8 id, UINT8 app_id,
     }
 
     bta_dm_pm_stop_timer_by_srvc_id(peer_addr, id);
-    /*p_dev = bta_dm_find_peer_device(peer_addr);*/
+    /*p_dev = bta_dm_find_peer_device(peer_addr, BT_TRANSPORT_BR_EDR);*/
 
 #if (BTM_SSR_INCLUDED == TRUE)
     /* set SSR parameters on SYS CONN OPEN */
@@ -402,7 +406,7 @@ static void bta_dm_pm_cback(tBTA_SYS_CONN_STATUS status, UINT8 id, UINT8 app_id,
         bta_dm_conn_srvcs.conn_srvc[j].new_request = TRUE;
         bdcpy(bta_dm_conn_srvcs.conn_srvc[j].peer_bdaddr, peer_addr);
 
-        APPL_TRACE_WARNING("new conn_srvc id:%d, app_id:%d", id, app_id);
+        APPL_TRACE_DEBUG("new conn_srvc id:%d, app_id:%d", id, app_id);
 
         bta_dm_conn_srvcs.count++;
         bta_dm_conn_srvcs.conn_srvc[j].state = status;
@@ -420,21 +424,19 @@ static void bta_dm_pm_cback(tBTA_SYS_CONN_STATUS status, UINT8 id, UINT8 app_id,
     }
 
 #if (BTM_SSR_INCLUDED == TRUE)
-    if (p_bta_dm_ssr_spec[index].max_lat
-#if (defined BTA_HH_INCLUDED && BTA_HH_INCLUDED == TRUE)
-            || index == BTA_DM_PM_SSR_HH
-#endif
-       ) {
-        bta_dm_pm_ssr(peer_addr);
-    } else {
-        if ( ((NULL != (p = BTM_ReadLocalFeatures ())) && HCI_SNIFF_SUB_RATE_SUPPORTED(p)) &&
-                ((NULL != (p = BTM_ReadRemoteFeatures (peer_addr))) && HCI_SNIFF_SUB_RATE_SUPPORTED(p)) &&
-                (index == BTA_DM_PM_SSR0)) {
+    /* Service set or SCO only. HID busy/idle must not renegotiate SSR.
+     * Gate on LMP feature bits, not BTA_DM_DI_USE_SSR: disable clears that bit. */
+    {
+        UINT8 *p = BTM_ReadLocalFeatures();
+        if (p && HCI_SNIFF_SUB_RATE_SUPPORTED(p) &&
+                ((p = BTM_ReadRemoteFeatures(peer_addr)) != NULL) &&
+                HCI_SNIFF_SUB_RATE_SUPPORTED(p)) {
             if (status == BTA_SYS_SCO_OPEN) {
-                APPL_TRACE_DEBUG("%s: SCO inactive, reset SSR to zero", __func__);
-                BTM_SetSsrParams (peer_addr, 0, 0, 0 );
-            } else if (status == BTA_SYS_SCO_CLOSE) {
-                APPL_TRACE_DEBUG("%s: SCO active, back to old SSR", __func__);
+                APPL_TRACE_DEBUG("%s: SCO active, reset SSR to zero", __func__);
+                BTM_SetSsrParams(peer_addr, 0, 0, 0);
+            } else if (status == BTA_SYS_SCO_CLOSE ||
+                       status == BTA_SYS_CONN_OPEN ||
+                       status == BTA_SYS_CONN_CLOSE) {
                 bta_dm_pm_ssr(peer_addr);
             }
         }
@@ -498,7 +500,7 @@ static void bta_dm_pm_set_mode(BD_ADDR peer_addr, tBTA_DM_PM_ACTION pm_request,
     }
 
     /* see if any attempt to put device in low power mode failed */
-    p_peer_device = bta_dm_find_peer_device(peer_addr);
+    p_peer_device = bta_dm_find_peer_device(peer_addr, BT_TRANSPORT_BR_EDR);
     /* if no peer device found return */
     if (p_peer_device == NULL) {
         return;
@@ -518,6 +520,10 @@ static void bta_dm_pm_set_mode(BD_ADDR peer_addr, tBTA_DM_PM_ACTION pm_request,
                             (p_bta_dm_pm_cfg[j].app_id == p_srvcs->app_id))) {
                     break;
                 }
+            }
+
+            if (j > p_bta_dm_pm_cfg[0].app_id) {
+                continue;
             }
 
             p_pm_cfg = &p_bta_dm_pm_cfg[j];
@@ -615,8 +621,8 @@ static void bta_dm_pm_set_mode(BD_ADDR peer_addr, tBTA_DM_PM_ACTION pm_request,
         }
         return;
     }
-    /* if pending power mode timer expires, and currecnt link is in a
-       lower power mode than current profile requirement, igonre it */
+    /* if pending power mode timer expires, and current link is in a
+       lower power mode than current profile requirement, ignore it */
     if (pm_req == BTA_DM_PM_EXECUTE && pm_request < pm_action) {
         APPL_TRACE_ERROR("Ignore the power mode request: %d", pm_request)
         return;
@@ -625,8 +631,10 @@ static void bta_dm_pm_set_mode(BD_ADDR peer_addr, tBTA_DM_PM_ACTION pm_request,
         p_peer_device->pm_mode_attempted = BTA_DM_PM_PARK;
         bta_dm_pm_park(peer_addr);
     } else if (pm_action & BTA_DM_PM_SNIFF) {
-        /* dont initiate SNIFF, if link_policy has it disabled */
-        if (p_peer_device->link_policy & HCI_ENABLE_SNIFF_MODE) {
+        /* Sniff needs the stack policy, the app permission, and the policy last sent. */
+        if ((p_peer_device->link_policy & HCI_ENABLE_SNIFF_MODE) &&
+                (p_peer_device->active_link_policy & HCI_ENABLE_SNIFF_MODE) &&
+                p_peer_device->sniff_allowed) {
             p_peer_device->pm_mode_attempted = BTA_DM_PM_SNIFF;
             bta_dm_pm_sniff(p_peer_device, (UINT8)(pm_action & 0x0F) );
         } else {
@@ -638,7 +646,7 @@ static void bta_dm_pm_set_mode(BD_ADDR peer_addr, tBTA_DM_PM_ACTION pm_request,
 }
 /*******************************************************************************
 **
-** Function         bta_ag_pm_park
+** Function         bta_dm_pm_park
 **
 ** Description      Switch to park mode.
 **
@@ -663,7 +671,7 @@ static BOOLEAN bta_dm_pm_park(BD_ADDR peer_addr)
 
 /*******************************************************************************
 **
-** Function         bta_ag_pm_sniff
+** Function         bta_dm_pm_sniff
 **
 ** Description      Switch to sniff mode.
 **
@@ -694,9 +702,9 @@ static BOOLEAN bta_dm_pm_sniff(tBTA_DM_PEER_DEVICE *p_peer_dev, UINT8 index)
 #endif
     {
 #if (BTM_SSR_INCLUDED == TRUE)
-        /* Dont initiate Sniff if controller has alreay accepted
+        /* Dont initiate Sniff if controller has already accepted
          * remote sniff params. This avoid sniff loop issue with
-         * some agrresive headsets who use sniff latencies more than
+         * some aggressive headsets who use sniff latencies more than
          * DUT supported range of Sniff intervals.*/
         if ((mode == BTM_PM_MD_SNIFF) && (p_peer_dev->info & BTA_DM_DI_ACP_SNIFF)) {
             APPL_TRACE_DEBUG("%s: already in remote initiate sniff", __func__);
@@ -739,6 +747,8 @@ static void bta_dm_pm_ssr(BD_ADDR peer_addr)
     tBTA_DM_SSR_SPEC *p_spec, *p_spec_cur;
     UINT8   i, j;
     int     ssr = BTA_DM_PM_SSR0;
+    int     cur_ssr;
+    BOOLEAN ssr_disallowed = FALSE;
 
     /* go through the connected services */
     for (i = 0; i < bta_dm_conn_srvcs.count ; i++) {
@@ -755,32 +765,52 @@ static void bta_dm_pm_ssr(BD_ADDR peer_addr)
                 }
             }
 
-            /* find the ssr index with the smallest max latency. */
-            p_spec_cur = &p_bta_dm_ssr_spec[p_bta_dm_pm_spec[p_bta_dm_pm_cfg[j].spec_idx].ssr];
+            if (j > p_bta_dm_pm_cfg[0].app_id) {
+                continue;
+            }
+
+            cur_ssr = p_bta_dm_pm_spec[p_bta_dm_pm_cfg[j].spec_idx].ssr;
+
+            /* Any non-HH/HD profile on this link disables SSR. */
+            if (cur_ssr == BTA_DM_PM_SSR0) {
+                ssr_disallowed = TRUE;
+                break;
+            }
+
+            /* find the ssr index with the smallest max latency among HH/HD. */
+            p_spec_cur = &p_bta_dm_ssr_spec[cur_ssr];
             p_spec = &p_bta_dm_ssr_spec[ssr];
 
 #if (defined BTA_HH_INCLUDED && BTA_HH_INCLUDED == TRUE)
             /* HH has the per connection SSR preference, already read the SSR params from BTA HH */
-            if (p_bta_dm_pm_spec[p_bta_dm_pm_cfg[j].spec_idx].ssr == BTA_DM_PM_SSR_HH) {
+            if (cur_ssr == BTA_DM_PM_SSR_HH) {
                 if (bta_hh_read_ssr_param(peer_addr, &p_spec_cur->max_lat, &p_spec_cur->min_rmt_to) == BTA_HH_ERR) {
                     continue;
                 }
             }
 #endif
             if (p_spec_cur->max_lat < p_spec->max_lat ||
-                    (ssr == BTA_DM_PM_SSR0 && p_bta_dm_pm_spec[p_bta_dm_pm_cfg[j].spec_idx].ssr != BTA_DM_PM_SSR0)) {
-                ssr = p_bta_dm_pm_spec[p_bta_dm_pm_cfg[j].spec_idx].ssr;
+                    (ssr == BTA_DM_PM_SSR0 && cur_ssr != BTA_DM_PM_SSR0)) {
+                ssr = cur_ssr;
             }
 
         }
     }
 
+    if (ssr_disallowed || ssr == BTA_DM_PM_SSR0) {
+        APPL_TRACE_DEBUG("bta_dm_pm_ssr: disable (disallowed=%d ssr=%d)", ssr_disallowed, ssr);
+        /* max_lat 0 disables subrating. HCI Max_Latency starts at 0x0002. */
+        BTM_SetSsrParams(peer_addr, 0, 0, 0);
+        return;
+    }
+
     p_spec = &p_bta_dm_ssr_spec[ssr];
     APPL_TRACE_WARNING("bta_dm_pm_ssr:%d, lat:%d", ssr, p_spec->max_lat);
-    if (p_spec->max_lat) {
-        /* set the SSR parameters. */
+    if (p_spec->max_lat >= HCI_SSR_MAX_LAT_MIN) {
         BTM_SetSsrParams (peer_addr, p_spec->max_lat,
                           p_spec->min_rmt_to, p_spec->min_loc_to);
+    } else {
+        BTM_SetSsrParams(peer_addr, 0, 0, 0);
     }
 }
 #endif
@@ -816,7 +846,8 @@ void bta_dm_pm_active(BD_ADDR peer_addr)
 ** Returns          void
 **
 *******************************************************************************/
-static void bta_dm_pm_btm_cback(BD_ADDR bd_addr, tBTM_PM_STATUS status, UINT16 value, UINT8 hci_status)
+static void bta_dm_pm_btm_cback(BD_ADDR bd_addr, tBTM_PM_STATUS status, UINT16 value, UINT8 hci_status,
+                                const tBTM_SSR_PARAMS *p_ssr)
 {
     tBTA_DM_PM_BTM_STATUS  *p_buf;
 
@@ -826,6 +857,17 @@ static void bta_dm_pm_btm_cback(BD_ADDR bd_addr, tBTM_PM_STATUS status, UINT16 v
         p_buf->value = value;
         p_buf->hci_status = hci_status;
         bdcpy(p_buf->bd_addr, bd_addr);
+        if ((status == BTM_PM_STS_SSR) && (p_ssr != NULL)) {
+            p_buf->max_tx_lat = p_ssr->max_tx_lat;
+            p_buf->max_rx_lat = p_ssr->max_rx_lat;
+            p_buf->min_remote_to = p_ssr->min_remote_to;
+            p_buf->min_local_to = p_ssr->min_local_to;
+        } else {
+            p_buf->max_tx_lat = 0;
+            p_buf->max_rx_lat = 0;
+            p_buf->min_remote_to = 0;
+            p_buf->min_local_to = 0;
+        }
         bta_sys_sendmsg(p_buf);
     }
 }
@@ -893,7 +935,7 @@ void bta_dm_pm_btm_status(tBTA_DM_MSG *p_data)
 {
     APPL_TRACE_DEBUG("%s status: %d", __func__, p_data->pm_status.status);
 
-    tBTA_DM_PEER_DEVICE *p_dev = bta_dm_find_peer_device(p_data->pm_status.bd_addr);
+    tBTA_DM_PEER_DEVICE *p_dev = bta_dm_find_peer_device(p_data->pm_status.bd_addr, BT_TRANSPORT_BR_EDR);
     if (NULL == p_dev) {
         return;
     }
@@ -917,7 +959,7 @@ void bta_dm_pm_btm_status(tBTA_DM_MSG *p_data)
         } else {
 #if (BTM_SSR_INCLUDED == TRUE)
             if (p_dev->prev_low) {
-                /* need to send the SSR paramaters to controller again */
+                /* need to send the SSR parameters to controller again */
                 bta_dm_pm_ssr(p_dev->peer_bdaddr);
             }
             p_dev->prev_low = BTM_PM_STS_ACTIVE;
@@ -956,6 +998,10 @@ void bta_dm_pm_btm_status(tBTA_DM_MSG *p_data)
              * in sniff mode from host side.
              */
             bta_dm_pm_stop_timer(p_data->pm_status.bd_addr);
+            /* A sniff request can complete after sniff was disallowed. Leave sniff. */
+            if (!p_dev->sniff_allowed) {
+                bta_dm_pm_active(p_dev->peer_bdaddr);
+            }
         } else {
             p_dev->info &= ~(BTA_DM_DI_SET_SNIFF | BTA_DM_DI_INT_SNIFF | BTA_DM_DI_ACP_SNIFF);
             if (info & BTA_DM_DI_SET_SNIFF) {
@@ -980,9 +1026,22 @@ void bta_dm_pm_btm_status(tBTA_DM_MSG *p_data)
             ) {
             tBTA_DM_SEC conn;
             conn.mode_chg.mode = p_data->pm_status.status;
+            conn.mode_chg.interval = p_data->pm_status.value;
             bdcpy(conn.mode_chg.bd_addr, p_data->pm_status.bd_addr);
             bta_dm_cb.p_sec_cback(BTA_DM_PM_MODE_CHG_EVT, (tBTA_DM_SEC *)&conn);
         }
+#if (BTM_SSR_INCLUDED == TRUE)
+        else if (p_data->pm_status.status == BTM_PM_STS_SSR) {
+            tBTA_DM_SEC conn;
+            bdcpy(conn.ssr.bd_addr, p_data->pm_status.bd_addr);
+            conn.ssr.hci_status = p_data->pm_status.hci_status;
+            conn.ssr.max_tx_lat = p_data->pm_status.max_tx_lat;
+            conn.ssr.max_rx_lat = p_data->pm_status.max_rx_lat;
+            conn.ssr.min_remote_to = p_data->pm_status.min_remote_to;
+            conn.ssr.min_local_to = p_data->pm_status.min_local_to;
+            bta_dm_cb.p_sec_cback(BTA_DM_PM_SSR_EVT, &conn);
+        }
+#endif
     }
 }
 
@@ -1001,6 +1060,61 @@ void bta_dm_pm_timer(tBTA_DM_MSG *p_data)
 {
     APPL_TRACE_EVENT("%s", __func__);
     bta_dm_pm_set_mode(p_data->pm_timer.bd_addr, p_data->pm_timer.pm_request, BTA_DM_PM_EXECUTE);
+}
+
+/*******************************************************************************
+**
+** Function         bta_dm_set_sniff_allowed
+**
+** Description      Allow or disallow sniff mode on one BR/EDR ACL.
+**
+** Returns          void
+**
+*******************************************************************************/
+void bta_dm_set_sniff_allowed(tBTA_DM_MSG *p_data)
+{
+    BOOLEAN allowed = p_data->set_sniff_allowed.allowed;
+    tBTM_CMPL_CB *p_cb = p_data->set_sniff_allowed.set_sniff_allowed_cb;
+    tBTA_DM_PEER_DEVICE *p_dev = NULL;
+    tBTM_STATUS status = BTM_SUCCESS;
+    UINT16 settings = 0;
+
+    do {
+        p_dev = bta_dm_find_peer_device(p_data->set_sniff_allowed.remote_bda, BT_TRANSPORT_BR_EDR);
+        if (p_dev == NULL) {
+            status = BTM_UNKNOWN_ADDR;
+            break;
+        }
+        /* bta_dm_cb.cur_policy is the stack's link policy. With no sniff bit there is nothing to restore. */
+        if (allowed && !(bta_dm_cb.cur_policy & HCI_ENABLE_SNIFF_MODE)) {
+            status = BTM_MODE_UNSUPPORTED;
+            break;
+        }
+
+        if (!allowed) {
+            /* Keep stack policy in link_policy; mask sniff only in the HCI write. */
+            settings = p_dev->link_policy & ~HCI_ENABLE_SNIFF_MODE;
+            status = bta_dm_apply_link_policy(p_dev, settings);
+            if (status != BTM_SUCCESS) {
+                break;
+            }
+            p_dev->sniff_allowed = FALSE;
+            /* A2DP or SCO may already have cleared the bit while the link is still in sniff. */
+            bta_dm_pm_stop_timer(p_dev->peer_bdaddr);
+            bta_dm_pm_active(p_dev->peer_bdaddr);
+        } else if (!p_dev->sniff_allowed) {
+            /* Clear the app restriction and submit the stored stack policy.
+             * Do not OR sniff back on; a stack temporary disable may still own that bit. */
+            status = bta_dm_apply_link_policy(p_dev, p_dev->link_policy);
+            if (status != BTM_SUCCESS) {
+                break;
+            }
+            p_dev->sniff_allowed = TRUE;
+            bta_dm_pm_set_mode(p_dev->peer_bdaddr, BTA_DM_PM_NO_ACTION, BTA_DM_PM_RESTART);
+        }
+    } while (0);
+
+    bta_dm_sniff_allowed_notify(p_cb, p_data->set_sniff_allowed.remote_bda, allowed, status);
 }
 
 /*******************************************************************************
@@ -1029,7 +1143,6 @@ static BOOLEAN bta_dm_pm_is_sco_active (void)
     return bScoActive;
 }
 
-
 /*******************************************************************************
 **
 ** Function         bta_dm_pm_hid_check
@@ -1050,7 +1163,7 @@ static void bta_dm_pm_hid_check(BOOLEAN bScoActive)
         if (bta_dm_conn_srvcs.conn_srvc[j].id == BTA_ID_HH ) {
             APPL_TRACE_DEBUG ("SCO status change(Active: %d), modify HID link policy. state: %d",
                               bScoActive, bta_dm_conn_srvcs.conn_srvc[j].state);
-            bta_dm_pm_set_sniff_policy( bta_dm_find_peer_device(bta_dm_conn_srvcs.conn_srvc[j].peer_bdaddr), bScoActive);
+            bta_dm_pm_set_sniff_policy( bta_dm_find_peer_device(bta_dm_conn_srvcs.conn_srvc[j].peer_bdaddr, BT_TRANSPORT_BR_EDR), bScoActive);
 
             /* if we had disabled link policy, seems like the hid device stop retrying SNIFF after a few tries. force sniff if needed */
             if (!bScoActive) {
@@ -1074,6 +1187,7 @@ static void bta_dm_pm_hid_check(BOOLEAN bScoActive)
 static void bta_dm_pm_set_sniff_policy(tBTA_DM_PEER_DEVICE *p_dev, BOOLEAN bDisable)
 {
     UINT16 policy_setting;
+    UINT16 settings;
 
     if (!p_dev) {
         return;
@@ -1084,9 +1198,8 @@ static void bta_dm_pm_set_sniff_policy(tBTA_DM_PEER_DEVICE *p_dev, BOOLEAN bDisa
                          (HCI_ENABLE_MASTER_SLAVE_SWITCH |
                           HCI_ENABLE_HOLD_MODE  |
                           HCI_ENABLE_PARK_MODE);
-
     } else {
-        /*  allow sniff after sco is closed */
+        /* allow sniff after sco is closed */
         policy_setting = bta_dm_cb.cur_policy;
     }
 
@@ -1095,10 +1208,48 @@ static void bta_dm_pm_set_sniff_policy(tBTA_DM_PEER_DEVICE *p_dev, BOOLEAN bDisa
         bta_dm_pm_active(p_dev->peer_bdaddr);
     }
 
-    /* update device record and set link policy */
+    /* link_policy keeps the stack intent; mask sniff only for the HCI write. */
     p_dev->link_policy = policy_setting;
-    BTM_SetLinkPolicy(p_dev->peer_bdaddr, &policy_setting);
+    settings = policy_setting;
+    if (!p_dev->sniff_allowed) {
+        settings &= ~HCI_ENABLE_SNIFF_MODE;
+    }
+    bta_dm_apply_link_policy(p_dev, settings);
 
+}
+
+/*******************************************************************************
+**
+** Function         bta_dm_sniff_allowed_notify
+**
+** Description      Report the result of a set-sniff-allowed request.
+**
+** Returns          void
+**
+*******************************************************************************/
+static void bta_dm_sniff_allowed_notify(tBTM_CMPL_CB *p_cb, BD_ADDR remote_bda, BOOLEAN allowed, tBTM_STATUS status)
+{
+    if (p_cb != NULL) {
+        tBTA_SET_SNIFF_ALLOWED_RESULTS results = {0};
+        results.status = status;
+        results.allowed = allowed;
+        bdcpy(results.rem_bda, remote_bda);
+        (*p_cb)(&results);
+    }
+}
+
+#else /* BTA_DM_PM_INCLUDED == FALSE */
+void bta_dm_set_sniff_allowed(tBTA_DM_MSG *p_data)
+{
+    tBTM_CMPL_CB *p_cb = p_data->set_sniff_allowed.set_sniff_allowed_cb;
+
+    if (p_cb != NULL) {
+        tBTA_SET_SNIFF_ALLOWED_RESULTS results = {0};
+        results.status = BTM_MODE_UNSUPPORTED;
+        results.allowed = p_data->set_sniff_allowed.allowed;
+        bdcpy(results.rem_bda, p_data->set_sniff_allowed.remote_bda);
+        (*p_cb)(&results);
+    }
 }
 #endif /* #if (BTA_DM_PM_INCLUDED == TRUE) */
 
@@ -1127,21 +1278,26 @@ UINT8 bta_dm_get_av_count(void)
 **
 ** Function         bta_dm_find_peer_device
 **
-** Description      Given an address, find the associated control block.
+** Description      Find the peer control block for an address. transport
+**                  BT_TRANSPORT_INVALID matches the address only.
 **
 ** Returns          tBTA_DM_PEER_DEVICE
 **
 *******************************************************************************/
-tBTA_DM_PEER_DEVICE *bta_dm_find_peer_device(BD_ADDR peer_addr)
+tBTA_DM_PEER_DEVICE *bta_dm_find_peer_device(BD_ADDR peer_addr, tBT_TRANSPORT transport)
 {
     tBTA_DM_PEER_DEVICE *p_dev = NULL;
 
     for (int i = 0; i < bta_dm_cb.device_list.count; i++) {
-        if (!bdcmp( bta_dm_cb.device_list.peer_device[i].peer_bdaddr, peer_addr)) {
-            p_dev = &bta_dm_cb.device_list.peer_device[i];
-            break;
+        if (bdcmp(bta_dm_cb.device_list.peer_device[i].peer_bdaddr, peer_addr)) {
+            continue;
         }
-
+        if (transport != BT_TRANSPORT_INVALID &&
+                bta_dm_cb.device_list.peer_device[i].transport != transport) {
+            continue;
+        }
+        p_dev = &bta_dm_cb.device_list.peer_device[i];
+        break;
     }
     return p_dev;
 }
@@ -1170,3 +1326,5 @@ tBTA_DM_CONTRL_STATE bta_dm_pm_obtain_controller_state(void)
 }
 
 #endif
+
+#endif // #if (CLASSIC_BT_INCLUDED == TRUE)

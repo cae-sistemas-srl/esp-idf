@@ -1,33 +1,28 @@
 [mapping:esp_ringbuf]
 archive: libesp_ringbuf.a
 entries:
-    * (noflash_text)
-    if FREERTOS_PLACE_FUNCTIONS_INTO_FLASH = y:
-        ringbuf: prvGetCurMaxSizeNoSplit (default)
-        ringbuf: prvGetCurMaxSizeAllowSplit (default)
-        ringbuf: prvGetCurMaxSizeByteBuf (default)
-        ringbuf: prvReturnItemByteBuf (default)
-        ringbuf: prvGetItemByteBuf (default)
-        ringbuf: prvCheckItemFitsByteBuffer (default)
-        ringbuf: prvReturnItemDefault (default)
-        ringbuf: prvGetItemDefault (default)
-        ringbuf: prvAcquireItemNoSplit (default)
-        ringbuf: prvSendItemDoneNoSplit (default)
-        ringbuf: prvCheckItemFitsDefault (default)
-        ringbuf: prvCopyItemByteBuf (default)
-        ringbuf: prvCopyItemAllowSplit (default)
-        ringbuf: prvCopyItemNoSplit (default)
-        ringbuf: prvInitializeNewRingbuffer (default)
-        ringbuf: prvReceiveGeneric (default)
-        ringbuf: xRingbufferCreate (default)
-        ringbuf: xRingbufferCreateStatic (default)
-        ringbuf: xRingbufferSend (default)
-        ringbuf: xRingbufferReceive (default)
-        ringbuf: xRingbufferReceiveSplit (default)
-        ringbuf: xRingbufferReceiveUpTo (default)
-        ringbuf: vRingbufferReturnItem (default)
-        ringbuf: vRingbufferDelete (default)
-        ringbuf: xRingbufferAddToQueueSetRead (default)
-        ringbuf: xRingbufferCanRead (default)
-        ringbuf: xRingbufferRemoveFromQueueSetRead (default)
-        ringbuf: vRingbufferGetInfo (default)
+    if RINGBUF_IN_IRAM = y:
+        * (noflash_text)    # All functions in IRAM
+    else:
+        * (default)         # All functions in Flash
+
+        # Always keep ISR functions in IRAM unless explicitly placed in Flash
+        if RINGBUF_PLACE_ISR_FUNCTIONS_INTO_FLASH = n:
+            ringbuf: prvReturnItemByteBuf (noflash_text)
+            ringbuf: prvReturnItemDefault (noflash_text)
+            ringbuf: prvGetItemByteBuf (noflash_text)
+            ringbuf: prvGetItemDefault (noflash_text)
+            ringbuf: prvCopyItemAllowSplit (noflash_text)
+            ringbuf: prvCopyItemByteBuf (noflash_text)
+            ringbuf: prvCopyItemNoSplit (noflash_text)
+            ringbuf: prvAcquireItemNoSplit (noflash_text)
+            ringbuf: prvCheckItemFitsByteBuffer (noflash_text)
+            ringbuf: prvCheckItemFitsDefault (noflash_text)
+            ringbuf: prvCheckItemAvail (noflash_text)
+            ringbuf: prvSendItemDoneNoSplit (noflash_text)
+            ringbuf: prvReceiveGenericFromISR (noflash_text)
+            ringbuf: xRingbufferSendFromISR (noflash_text)
+            ringbuf: xRingbufferReceiveFromISR (noflash_text)
+            ringbuf: xRingbufferReceiveSplitFromISR (noflash_text)
+            ringbuf: xRingbufferReceiveUpToFromISR (noflash_text)
+            ringbuf: vRingbufferReturnItemFromISR (noflash_text)

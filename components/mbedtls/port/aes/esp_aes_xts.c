@@ -35,10 +35,9 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <sys/lock.h>
-#include "mbedtls/aes.h"
-
 #include "aes/esp_aes.h"
+#include "psa/crypto_values.h"
+#include "mbedtls/platform_util.h"
 
 void esp_aes_xts_init( esp_aes_xts_context *ctx )
 {
@@ -65,7 +64,7 @@ static int esp_aes_xts_decode_keys( const unsigned char *key,
     switch ( keybits ) {
     case 256: break;
     case 512: break;
-    default : return ( MBEDTLS_ERR_AES_INVALID_KEY_LENGTH );
+    default : return ( PSA_ERROR_NOT_SUPPORTED );
     }
 
     *key1bits = half_keybits;
@@ -124,7 +123,7 @@ int esp_aes_xts_setkey_dec( esp_aes_xts_context *ctx,
     return esp_aes_setkey( &ctx->crypt, key1, key1bits );
 }
 
-/* Endianess with 64 bits values */
+/* Endianness with 64 bits values */
 #ifndef GET_UINT64_LE
 #define GET_UINT64_LE(n,b,i)                            \
 {                                                       \
@@ -158,7 +157,7 @@ int esp_aes_xts_setkey_dec( esp_aes_xts_context *ctx,
  *
  * This function multiplies a field element by x in the polynomial field
  * representation. It uses 64-bit word operations to gain speed but compensates
- * for machine endianess and hence works correctly on both big and little
+ * for machine endianness and hence works correctly on both big and little
  * endian machines.
  */
 static void esp_gf128mul_x_ble( unsigned char r[16],
@@ -177,7 +176,7 @@ static void esp_gf128mul_x_ble( unsigned char r[16],
 }
 
 /*
- * AES-XTS buffer encryption/decryption
+ * XTS-AES buffer encryption/decryption
  */
 int esp_aes_crypt_xts( esp_aes_xts_context *ctx,
                        int mode,
@@ -189,31 +188,68 @@ int esp_aes_crypt_xts( esp_aes_xts_context *ctx,
     int ret;
     size_t blocks = length / 16;
     size_t leftover = length % 16;
+    size_t bulk_blocks;
     unsigned char tweak[16];
+    unsigned char bulk_tweak[16];
     unsigned char prev_tweak[16];
     unsigned char tmp[16];
 
     /* Sectors must be at least 16 bytes. */
     if ( length < 16 ) {
-        return MBEDTLS_ERR_AES_INVALID_INPUT_LENGTH;
+        return PSA_ERROR_DATA_INVALID;
     }
 
     /* NIST SP 80-38E disallows data units larger than 2**20 blocks. */
     if ( length > ( 1 << 20 ) * 16 ) {
-        return MBEDTLS_ERR_AES_INVALID_INPUT_LENGTH;
+        return PSA_ERROR_DATA_INVALID;
     }
 
     /* Compute the tweak. */
-    ret = esp_aes_crypt_ecb( &ctx->tweak, MBEDTLS_AES_ENCRYPT,
+    ret = esp_aes_crypt_ecb( &ctx->tweak, ESP_AES_ENCRYPT,
                              data_unit, tweak );
     if ( ret != 0 ) {
-        return ( ret );
+        goto cleanup;
+    }
+
+    bulk_blocks = blocks;
+    if ( leftover && ( mode == ESP_AES_DECRYPT ) ) {
+        bulk_blocks--;
+    }
+
+    if ( bulk_blocks > 0 ) {
+        size_t i, j;
+
+        memcpy( bulk_tweak, tweak, sizeof( bulk_tweak ) );
+        for ( i = 0; i < bulk_blocks; i++ ) {
+            for ( j = 0; j < 16; j++ ) {
+                output[i * 16 + j] = input[i * 16 + j] ^ bulk_tweak[j];
+            }
+            esp_gf128mul_x_ble( bulk_tweak, bulk_tweak );
+        }
+
+        /* A single hardware operation for every staged block. */
+        ret = esp_aes_crypt_ecb_blocks( &ctx->crypt, mode, bulk_blocks * 16,
+                                        output, output );
+        if ( ret != 0 ) {
+            goto cleanup;
+        }
+
+        for ( i = 0; i < bulk_blocks; i++ ) {
+            for ( j = 0; j < 16; j++ ) {
+                output[i * 16 + j] ^= tweak[j];
+            }
+            esp_gf128mul_x_ble( tweak, tweak );
+        }
+
+        input  += bulk_blocks * 16;
+        output += bulk_blocks * 16;
+        blocks -= bulk_blocks;
     }
 
     while ( blocks-- ) {
         size_t i;
 
-        if ( leftover && ( mode == MBEDTLS_AES_DECRYPT ) && blocks == 0 ) {
+        if ( leftover && ( mode == ESP_AES_DECRYPT ) && blocks == 0 ) {
             /* We are on the last block in a decrypt operation that has
              * leftover bytes, so we need to use the next tweak for this block,
              * and this tweak for the lefover bytes. Save the current tweak for
@@ -229,7 +265,7 @@ int esp_aes_crypt_xts( esp_aes_xts_context *ctx,
 
         ret = esp_aes_crypt_ecb( &ctx->crypt, mode, tmp, tmp );
         if ( ret != 0 ) {
-            return ( ret );
+            goto cleanup;
         }
 
         for ( i = 0; i < 16; i++ ) {
@@ -246,7 +282,7 @@ int esp_aes_crypt_xts( esp_aes_xts_context *ctx,
     if ( leftover ) {
         /* If we are on the leftover bytes in a decrypt operation, we need to
          * use the previous tweak for these bytes (as saved in prev_tweak). */
-        unsigned char *t = mode == MBEDTLS_AES_DECRYPT ? prev_tweak : tweak;
+        unsigned char *t = mode == ESP_AES_DECRYPT ? prev_tweak : tweak;
 
         /* We are now on the final part of the data unit, which doesn't divide
          * evenly by 16. It's time for ciphertext stealing. */
@@ -254,7 +290,7 @@ int esp_aes_crypt_xts( esp_aes_xts_context *ctx,
         unsigned char *prev_output = output - 16;
 
         /* Copy ciphertext bytes from the previous block to our output for each
-         * byte of cyphertext we won't steal. At the same time, copy the
+         * byte of ciphertext we won't steal. At the same time, copy the
          * remainder of the input for this final round (since the loop bounds
          * are the same). */
         for ( i = 0; i < leftover; i++ ) {
@@ -270,7 +306,7 @@ int esp_aes_crypt_xts( esp_aes_xts_context *ctx,
 
         ret = esp_aes_crypt_ecb( &ctx->crypt, mode, tmp, tmp );
         if ( ret != 0 ) {
-            return ret;
+            goto cleanup;
         }
 
         /* Write the result back to the previous block, overriding the previous
@@ -280,5 +316,12 @@ int esp_aes_crypt_xts( esp_aes_xts_context *ctx,
         }
     }
 
-    return ( 0 );
+cleanup:
+    /* tweak/prev_tweak are key-derived and tmp holds plaintext-derived data.
+     * Scrub all three on every exit so they cannot be recovered from stack RAM. */
+    mbedtls_platform_zeroize( tweak, sizeof( tweak ) );
+    mbedtls_platform_zeroize( bulk_tweak, sizeof( bulk_tweak ) );
+    mbedtls_platform_zeroize( prev_tweak, sizeof( prev_tweak ) );
+    mbedtls_platform_zeroize( tmp, sizeof( tmp ) );
+    return ( ret );
 }

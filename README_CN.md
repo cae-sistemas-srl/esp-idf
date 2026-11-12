@@ -4,17 +4,18 @@
 
 ESP-IDF 是乐鑫官方推出的物联网开发框架，支持 Windows、Linux 和 macOS 操作系统。
 
+# ESP-IDF 版本支持期限
+
+![支持期限](https://dl.espressif.com/dl/esp-idf/support-periods.svg?v=1)
+
+- 请参考 [ESP-IDF 支持政策](SUPPORT_POLICY_CN.md) 以及 [相关文档](https://docs.espressif.com/projects/esp-idf/zh_CN/latest/esp32/versions.html) 了解更多关于 ESP-IDF 版本的信息。
+- 请参考 [ESP-IDF 版本停止维护 (EOL) 公告](https://documentation.espressif.com/zh/documentList?qr=%E8%BD%AF%E4%BB%B6%E7%89%88%E6%9C%AC&eol=true)。
+
 # ESP-IDF 与乐鑫芯片
 
-下表总结了乐鑫芯片在 ESP-IDF 各版本中的支持状态，其中 :green_circle: 代表已支持，:yellow_circle: 代表目前处于预览支持状态。在预览支持阶段，因为新芯片尚未完全添加到构建系统目录，所以一些重要的内容（如文档和技术规格书等）可能会缺失。请确保使用与芯片相匹配的 ESP-IDF 版本。
+![芯片支持](https://dl.espressif.com/dl/esp-idf/chip-support.svg?v=1)
 
-|   芯片      |     v3.3       |      v4.0      |       v4.1     |     v4.2       |     v4.3       |     v4.4       |                                                            |
-|:----------- |:-------------: | :-------------:| :-------------:| :-------------:| :-------------:| :-------------:|:---------------------------------------------------------- |
-|ESP32        | :green_circle: | :green_circle: | :green_circle: | :green_circle: | :green_circle: | :green_circle: |                                                            |
-|ESP32-S2     |                |                |                | :green_circle: | :green_circle: | :green_circle: |                                                            |
-|ESP32-C3     |                |                |                |                | :green_circle: | :green_circle: |                                                            |
-|ESP32-S3     |                |                |                |                | :yellow_circle:| :green_circle: | [芯片发布公告](https://www.espressif.com/zh-hans/news/ESP32_S3) |
-|ESP32-H2     |                |                |                |                |                | :yellow_circle:| [芯片发布公告](https://www.espressif.com/zh-hans/news/ESP32_H2) |
+请参考 [ESP-IDF 版本与乐鑫芯片版本兼容性](https://github.com/espressif/esp-idf/blob/master/COMPATIBILITY_CN.md) 了解 ESP-IDF 版本与芯片版本之间的兼容性详情。
 
 对于 2016 年之前发布的乐鑫芯片（包括 ESP8266 和 ESP8285），请参考 [RTOS SDK](https://github.com/espressif/ESP8266_RTOS_SDK)。
 
@@ -28,11 +29,9 @@ ESP-IDF 是乐鑫官方推出的物联网开发框架，支持 Windows、Linux �
 
 ### 非 GitHub 分叉的 ESP-IDF 项目
 
-ESP-IDF 中的子模块采用相对路径（[详见 .gitmodules 文件](.gitmodules)），所以它们会指向 GitHub。
-如果 ESP-IDF 被分叉到的仓库不在 GitHub 上，那么你需要在克隆结束后运行该脚本 [tools/set-submodules-to-github.sh](tools/set-submodules-to-github.sh)。
+ESP-IDF 中的子模块采用相对路径（[详见 .gitmodules 文件](.gitmodules)），所以它们会指向 GitHub。 如果 ESP-IDF 被分叉到的仓库不在 GitHub 上，那么你需要在克隆结束后运行该脚本 [tools/set-submodules-to-github.sh](tools/set-submodules-to-github.sh)。
 
-这个脚本会为所有的子模块设置绝对路径，接着可以通过 `git submodule update --init --recursive` 完成子模块的更新。
-如果 ESP-IDF 是从 GitHub 上克隆得到，则不需要此步骤。
+这个脚本会为所有的子模块设置绝对路径，接着可以通过 `git submodule update --init --recursive` 完成子模块的更新。如果 ESP-IDF 是从 GitHub 上克隆得到，则不需要此步骤。
 
 ## 寻找项目
 
@@ -53,7 +52,7 @@ ESP-IDF 中的子模块采用相对路径（[详见 .gitmodules 文件](.gitmodu
 * 在主机中安装入门指南中提到的构建所依赖的工具。
 * 运行安装脚本来设置构建环境。可为 Windows shell 选择 `install.bat` 或 `install.ps1`，为 Unix shell 选择 `install.sh` 和 `install.fish`。
 * 在使用 ESP-IDF 之前，需要在 shell 中运行导出脚本。Windows 下可运行 `export.bat`，Unix 下可运行 `source export.sh`。
-  
+
 ## 配置项目
 
 * `idf.py set-target <chip_name>` 可将项目的目标芯片设置为 `<chip_name>`。运行 `idf.py set-target`，不用带任何参数，可查看所有支持的目标芯片列表。
@@ -67,7 +66,7 @@ ESP-IDF 中的子模块采用相对路径（[详见 .gitmodules 文件](.gitmodu
 
 ## 烧写项目
 
-当构建结束，终端会打印出一条命令行，告知如何使用 esptool.py 工具烧写项目到芯片中。但你也可以运行下面这条命令来自动烧写：
+当构建结束，终端会打印出一条命令行，告知如何使用 `esptool` 工具烧写项目到芯片中。但你也可以运行下面这条命令来自动烧写：
 
 `idf.py -p PORT flash`
 
@@ -79,7 +78,7 @@ ESP-IDF 中的子模块采用相对路径（[详见 .gitmodules 文件](.gitmodu
 
 ## 观察串口输入
 
-`idf.py monitor` 会调用 [idf_monitor 工具](https://docs.espressif.com/projects/esp-idf/en/latest/get-started/idf-monitor.html)来显示乐鑫芯片的串口输出。`idf_monitor` 还包含一系列的功能来解析程序崩溃后的输出结果并与设备进行交互。更多详细内容，请参阅[文档](https://docs.espressif.com/projects/esp-idf/en/latest/get-started/idf-monitor.html).
+`idf.py monitor` 会调用 [esp-idf-monitor 工具](https://github.com/espressif/esp-idf-monitor)来显示乐鑫芯片的串口输出。esp-idf-monitor 还包含一系列的功能来解析程序崩溃后的输出结果并与设备进行交互。更多详细内容，请参阅[文档](https://docs.espressif.com/projects/esp-idf/en/latest/get-started/idf-monitor.html).
 
 输入 `Ctrl-]` 可退出监视器。
 
@@ -100,13 +99,15 @@ ESP-IDF 中的子模块采用相对路径（[详见 .gitmodules 文件](.gitmodu
 
 ## 擦除 Flash
 
-`idf.py flash` 并不会擦除 flash 上所有的内容，但是有时候我们需要设备恢复到完全擦除的状态，尤其是分区表发生了变化或者 OTA 应用升级时。要擦除整块 flash 请运行 `idf.py erase_flash`。
+`idf.py flash` 并不会擦除 flash 上所有的内容，但是有时候我们需要设备恢复到完全擦除的状态，尤其是分区表发生了变化或者 OTA 应用升级时。要擦除整块 flash 请运行 `idf.py erase-flash`。
 
-这条命令还可以和其余命令整合在一起，`idf.py -p PORT erase_flash flash` 会擦除一切然后重新烧写新的应用程序、引导程序和分区表。
+这条命令还可以和其余命令整合在一起，`idf.py -p PORT erase-flash flash` 会擦除一切然后重新烧写新的应用程序、引导程序和分区表。
 
 # 其它参考资源
 
 * 最新版的文档：https://docs.espressif.com/projects/esp-idf/ ，该文档是由本仓库 [docs 目录](docs) 构建得到。
+
+* [初学者指南：主要概念和资源](https://www.bilibili.com/video/BV1114y1r7du/)
 
 * 可以前往 [esp32.com 论坛](https://esp32.com/) 提问，挖掘社区资源。
 

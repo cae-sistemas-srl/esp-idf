@@ -109,7 +109,7 @@ static int wpa_bss_known(struct wpa_supplicant *wpa_s, struct wpa_bss *bss)
 {
 	struct wifi_ssid *ssid = esp_wifi_sta_get_prof_ssid_internal();
 
-	if (ssid->ssid == NULL || ssid->len == 0)
+	if (ssid->len == 0)
 		return 0;
 	if (ssid->len == bss->ssid_len &&
 	    os_memcmp(ssid->ssid, bss->ssid, ssid->len) == 0)
@@ -132,8 +132,9 @@ static int wpa_bss_in_use(struct wpa_supplicant *wpa_s, struct wpa_bss *bss)
 
 	return !is_zero_ether_addr(bss->bssid) && wpa_s->current_bss->bssid &&
 		(os_memcmp(bss->bssid, wpa_s->current_bss->bssid, ETH_ALEN) == 0);
-#endif
+#else
 	return 0;
+#endif
 }
 
 static int wpa_bss_remove_oldest_unknown(struct wpa_supplicant *wpa_s)
@@ -198,7 +199,7 @@ static struct wpa_bss * wpa_bss_add(struct wpa_supplicant *wpa_s,
 	bss->ssid_len = ssid_len;
 	bss->ie_len = res->ie_len;
 	bss->beacon_ie_len = res->beacon_ie_len;
-	os_memcpy(bss + 1, res + 1, res->ie_len + res->beacon_ie_len);
+	os_memcpy(bss->ies, res + 1, res->ie_len + res->beacon_ie_len);
 
 	dl_list_add_tail(&wpa_s->bss, &bss->list);
 	dl_list_add_tail(&wpa_s->bss_id, &bss->list_id);
@@ -224,11 +225,11 @@ wpa_bss_update(struct wpa_supplicant *wpa_s, struct wpa_bss *bss,
 		 * to filter out the obsolete results here to make sure only the
 		 * most current BSS information remains in the table.
 		 */
-		wpa_printf(MSG_DEBUG, "BSS: " MACSTR
+		wpa_printf(MSG_MSGDUMP, "BSS: " MACSTR
 			   " has multiple entries in the scan results - select the most current one",
 			   MAC2STR(bss->bssid));
 		calculate_update_time(fetch_time, res->age, &update_time);
-		wpa_printf(MSG_DEBUG,
+		wpa_printf(MSG_MSGDUMP,
 			   "Accept this BSS entry since it looks more current than the previous update");
 	}
 
@@ -238,7 +239,7 @@ wpa_bss_update(struct wpa_supplicant *wpa_s, struct wpa_bss *bss,
 	dl_list_del(&bss->list);
 	if (bss->ie_len + bss->beacon_ie_len >=
 	    res->ie_len + res->beacon_ie_len) {
-		os_memcpy(bss + 1, res + 1, res->ie_len + res->beacon_ie_len);
+		os_memcpy(bss->ies, res + 1, res->ie_len + res->beacon_ie_len);
 		bss->ie_len = res->ie_len;
 		bss->beacon_ie_len = res->beacon_ie_len;
 	} else {
@@ -258,7 +259,7 @@ wpa_bss_update(struct wpa_supplicant *wpa_s, struct wpa_bss *bss,
 			if (wpa_s->current_bss == bss)
 				wpa_s->current_bss = nbss;
 			bss = nbss;
-			os_memcpy(bss + 1, res + 1,
+			os_memcpy(bss->ies, res + 1,
 				  res->ie_len + res->beacon_ie_len);
 			bss->ie_len = res->ie_len;
 			bss->beacon_ie_len = res->beacon_ie_len;
@@ -469,6 +470,31 @@ struct wpa_bss * wpa_bss_get_next_bss(struct wpa_supplicant *wpa_s,
 const u8 * wpa_bss_get_ie(const struct wpa_bss *bss, u8 ie)
 {
 	return get_ie((const u8 *) (bss + 1), bss->ie_len, ie);
+}
+
+/**
+ * wpa_bss_get_vendor_ie - Fetch a vendor information element from a BSS entry
+ * @bss: BSS table entry
+ * @vendor_type: Vendor type (four octets starting the IE payload)
+ * Returns: Pointer to the information element (id field) or %NULL if not found
+ *
+ * This function returns the first matching information element in the BSS
+ * entry.
+ */
+const u8 * wpa_bss_get_vendor_ie(const struct wpa_bss *bss, u32 vendor_type)
+{
+	const u8 *ies;
+	const struct element *elem;
+
+	ies = wpa_bss_ie_ptr(bss);
+
+	for_each_element_id(elem, WLAN_EID_VENDOR_SPECIFIC, ies, bss->ie_len) {
+		if (elem->datalen >= 4 &&
+				vendor_type == WPA_GET_BE32(elem->data))
+			return &elem->id;
+	}
+
+	return NULL;
 }
 
 int wpa_bss_ext_capab(const struct wpa_bss *bss, unsigned int capab)
